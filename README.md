@@ -1,4 +1,4 @@
-> **Work in progress.** Fork of [desktop-mcp-bridge](https://github.com/thriftshoppin/desktop-mcp-bridge) rebranded as the **Grok Desktop Bridge** for Grok / Local Computer Assistant. Early personal build for one Windows PC. M0 (the "takeover core") is written and mostly tested; M1-M3 are not started. **Remote mode (opt-in streamable-HTTP + outbound tunnel) is implemented** — see [Remote mode](#remote-mode-implemented) and `docs/REMOTE_QUICKSTART.md`.
+> **Work in progress.** Fork of [desktop-mcp-bridge](https://github.com/thriftshoppin/desktop-mcp-bridge) rebranded as the **Grok Desktop Bridge** for Grok / Local Computer Assistant. Early personal build for one Windows PC. M0 (the "takeover core") is written and mostly tested; M1-M3 are not started. **Remote mode (opt-in streamable-HTTP + outbound tunnel) is implemented** — see [Remote mode](#remote-mode-implemented--grok-bot-cloud-only) and `docs/REMOTE_QUICKSTART.md`.
 > Not production-ready and not hardened for public use: it runs an **elevated** worker that can see the screen and control the keyboard and mouse, and its safety checks are best-effort. Read SECURITY.md before running anything. Paths in `config.json` are specific to the original author's machine — edit them for yours.
 
 # Grok Desktop Bridge
@@ -54,7 +54,7 @@ Details: [SECURITY.md](SECURITY.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-A
 
 ## Install / register (you do this; the bridge never edits your client's config)
 
-**Intended primary: Grok / Local Computer Assistant** (see [Remote mode](#remote-mode-implemented); multi-bot named tokens supported).
+**Intended primary: Grok / Local Computer Assistant** (see [Remote mode](#remote-mode-implemented--grok-bot-cloud-only); multi-bot named tokens supported).
 **Works today unchanged:** Claude desktop (Cowork) or Claude Code as a local stdio MCP client (below).
 
 1. **Recommended first:** run `C:\Users\SysAdmin\Claude\log-tools\Protect-ClaudeLog.ps1` yourself so the actions log becomes
@@ -161,14 +161,14 @@ paths - Recycle Bin deletes - temp files under `%TEMP%\desktop-bridge\` older th
 (tool, window/element/file, <= 120-char escaped excerpt), the log records it, and **`desktop_resume` refuses** (`INJECTION_LOCKOUT`). Only the user can resume, by typing `y` at "Resume? (y/N)" in the feed window. Weak matches are labelled and logged only.
 No setting, flag or parameter relaxes this. Text *inside images* cannot be scanned (no OCR in v1).
 
-**Config approval.** `config.json` (+ `config.local.json`) are hashed; the hash of the version you last approved is stored in `%ProgramData%\DesktopBridge\state\config.approved.json`. If the config is new or changed, the feed window shows what changed and asks
+**Config approval.** `config.json` (+ `config.local.json`) are hashed; the hash of the version you last approved is stored in `%ProgramData%\GrokDesktopBridge\state\config.approved.json`. If the config is new or changed, the feed window shows what changed and asks
 `Approve changed config? (y/N)`; **no tool works until you answer**. `config.json`, `SKILL.md`, `SECURITY.md` and the approval store are on the protected-paths list (`fs` refuses writes, `run` refuses non-read-only commands touching them).
 
 **Optional hard lock (do NOT let Grok run this; you run it yourself in an elevated PowerShell).** The worker runs as your account, elevated, so software checks can in theory be bypassed. An ACL makes accidental or casual edits impossible; it is not a boundary against an elevated process of the same account:
 ```
-icacls "C:\Users\SysAdmin\tools\claude-desktop-bridge\config.json" /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)"
-icacls "C:\Users\SysAdmin\tools\claude-desktop-bridge\skills" /inheritance:r /grant:r "SYSTEM:(RX)" "Administrators:(RX)" /T
-icacls "C:\Users\SysAdmin\tools\claude-desktop-bridge\SECURITY.md" /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)"
+icacls "C:\Users\SysAdmin\tools\grok-desktop-bridge\config.json" /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)"
+icacls "C:\Users\SysAdmin\tools\grok-desktop-bridge\skills" /inheritance:r /grant:r "SYSTEM:(RX)" "Administrators:(RX)" /T
+icacls "C:\Users\SysAdmin\tools\grok-desktop-bridge\SECURITY.md" /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)"
 ```
 To edit later: `icacls <path> /grant "Administrators:(F)"` (then re-run the lock). A real boundary needs a separate account that owns these files.
 
@@ -177,19 +177,15 @@ To edit later: `icacls <path> /grant "Administrators:(F)"` (then re-run the lock
 with the target (`FOCUS_CHANGED` if you switched windows; the bridge does not steal focus back) and no keys/mouse buttons held by you in that window (`USER_INTERVENTION`; media/volume/browser keys are ignored, so changing a song or closing an unrelated window does not matter). Stops carry `data` (foreground_now, target_alive, typed, remaining). A bump of the mouse during a glide is waited out (`control.yield_wait_s`, default 6 s, until it is still for 0.5 s), then the glide restarts; a click is cancelled if the cursor is not where the bridge put it. Closing the feed window stops the worker and the session.
 **mcp SDK quirk fixed:** `desktop_bridge/mcp_patch.py` stops the SDK from JSON-parsing string arguments such as `{}` or `[1,2]` (it would have broken writing JSON files with `fs`, `type`, `clipboard_set`).
 
-## Remote mode (implemented)
+## Remote mode (implemented) — Grok Bot cloud only
 
-Opt-in localhost MCP streamable-HTTP + outbound tunnel. Same tools and safety as stdio mode.
+Opt-in localhost MCP streamable-HTTP + outbound tunnel. **Production use is remote Grok only** (local stdio remains for selftest).
 
-* **Start:** `python launcher.py --remote --port 8765` (binds `127.0.0.1` only).
-* **Tokens:** per-bot named Bearer tokens — `python launcher.py --add-bot <name>`, `--list-bots`, `--revoke-bot <name>`. Stored under `%LOCALAPPDATA%\GrokDesktopBridge\remote_bots.json`. Constant-time compare; requests without a valid token get **401**.
-* **Multi-bot:** several bots share one listener and the shared guardian / feed / Esc kill switch. Each call is tagged with the bot name; Esc stops **all** bots and the HTTP server.
-* **Tunnel (user-run):** `cloudflared tunnel --url http://127.0.0.1:8765` (default documented path). Hand the public HTTPS URL + bot token to the cloud bot.
-* **Safety still local:** white pulsing overlay, action feed (`Remote session connected` + per-call logs), two-stage Esc, injection gate, config approval, no hidden execution.
-* **Client skill:** `skills/grok-bridge-client/SKILL.md` (generic — any Grok Bot).
-* **Windows walkthrough:** [`docs/REMOTE_QUICKSTART.md`](docs/REMOTE_QUICKSTART.md).
-
-### Longer-term (not in this branch)
-
-An outbound-only WebSocket relay (no listening socket on the PC) remains a desirable alternative for tighter threat models; remote HTTP + user tunnel is the power-user path that ships today.
+* **Start:** `python launcher.py --remote --port 8790` (binds `127.0.0.1`; default instance `grok`).
+* **Grok-only gate:** every request needs `Authorization: Bearer <token>` **and** `X-Grok-Bridge-Client: grok-bot`. Blocked User-Agents / MCP `clientInfo` for Claude, Codex, Cursor, etc. yield **403**.
+* **Tokens:** `--add-bot` / `--list-bots` / `--revoke-bot` under `%LOCALAPPDATA%\GrokDesktopBridge\remote_bots.json`.
+* **Isolation:** separate pipes/mutexes/AppData/temp/task from Claude `desktop-mcp-bridge` (see `desktop_bridge/brand.py`).
+* **Tunnel:** `cloudflared tunnel --url http://127.0.0.1:8790`.
+* **Do not** share the tunnel URL + token with other people, free/browser accounts, or other AI products — that hands over the PC.
+* **Docs:** [`docs/REMOTE_QUICKSTART.md`](docs/REMOTE_QUICKSTART.md), `skills/grok-bridge-client/SKILL.md`.
 

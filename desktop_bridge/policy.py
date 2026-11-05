@@ -238,7 +238,7 @@ class Approval:
     def __init__(self, root: str, store_dir: str | None = None):
         self.root = root
         # %ProgramData% is not redirected for packaged (MSIX) parents, unlike %LOCALAPPDATA%: the store stays in one place for every client
-        self.dir = store_dir or os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "DesktopBridge", "state")
+        self.dir = store_dir or os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "GrokDesktopBridge", "state")
         self.path = os.path.join(self.dir, "config.approved.json")
 
     def state(self) -> tuple[bool, list[str], str]:
@@ -259,7 +259,7 @@ class Approval:
     def legacy_dirs() -> list[str]:
         import glob
         la = os.environ.get("LOCALAPPDATA", "")
-        return [os.path.join(la, "desktop-bridge")] + glob.glob(os.path.join(la, "Packages", "Claude_*", "LocalCache", "Local", "desktop-bridge"))
+        return [os.path.join(la, "GrokDesktopBridge"), os.path.join(la, "desktop-bridge")] + glob.glob(os.path.join(la, "Packages", "Claude_*", "LocalCache", "Local", "desktop-bridge"))
 
     def import_legacy(self) -> str | None:
         """One-time migration: if an earlier version recorded the user's approval of THIS exact config (same SHA-256) in the old location, adopt it.

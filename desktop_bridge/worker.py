@@ -32,6 +32,7 @@ from . import control as control_mod
 from . import mcp_patch
 from . import policy, safety, tools, winapi
 from .overlay import Overlay
+from . import brand
 from .safety import KillSwitch, LogWriter, ToolRefused
 
 import anyio
@@ -40,7 +41,7 @@ import psutil
 from mcp.server.mcpserver import MCPServer
 from mcp.server.stdio import stdio_server
 
-SERVER_NAME = "desktop-bridge"
+SERVER_NAME = brand.SERVER_NAME
 HOLD = {}
 
 class Feed:
@@ -491,7 +492,7 @@ def require_visible_console(root_fn, visible_fn) -> bool:
 
 
 def control_pipe_name(instance: str) -> str:
-    return f"desktop-bridge-ctl-{instance}-{os.environ.get('USERNAME', 'user').lower()}"
+    return f"{brand.PIPE_PREFIX}-ctl-{instance}-{os.environ.get('USERNAME', 'user').lower()}"
 
 
 # ----------------------------------------------------------------------------- main (the guardian)
@@ -500,9 +501,9 @@ def main() -> None:
     import secrets
     ap = argparse.ArgumentParser()
     ap.add_argument("--guardian", action="store_true", help="(default mode) shared guardian: one elevated worker serving every client")
-    ap.add_argument("--instance", default="main", help="instance name (tests use their own so they never touch the user's guardian)")
+    ap.add_argument("--instance", default=brand.INSTANCE_DEFAULT, help="instance name (tests use their own so they never touch the user's guardian)")
     ap.add_argument("--idle-exit-s", type=float, default=0, help="test hook: exit this many seconds after the last client left (default: config guardian.idle_exit_min)")
-    ap.add_argument("--approval-dir", default=None, help="test hook: state folder (config approval + client allow-list); default is the DesktopBridge state folder under ProgramData")
+    ap.add_argument("--approval-dir", default=None, help="test hook: state folder (config approval + client allow-list); default is the GrokDesktopBridge state folder under ProgramData")
     ap.add_argument("--force-overlay-fail", action="store_true", help="test hook: make overlay creation fail (can only make the bridge MORE restrictive)")
     args = ap.parse_args()
     mcp_patch.apply()
@@ -517,7 +518,7 @@ def main() -> None:
     import win32api
     import win32event
     import winerror
-    mutex = win32event.CreateMutex(None, False, f"Local\\DesktopBridgeGuardian-{instance}")
+    mutex = win32event.CreateMutex(None, False, f"{brand.MUTEX_GUARDIAN_PREFIX}-{instance}")
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
         feed.put("another Grok Desktop Bridge guardian is already running for this user: this window closes.", "yel")
         time.sleep(0.8)
@@ -532,7 +533,7 @@ def main() -> None:
             return
         stopping.set()
         try:
-            log.log(f"desktop-bridge guardian stopping: {reason}")
+            log.log(f"grok-desktop-bridge guardian stopping: {reason}")
             feed.put(f"guardian stopping: {reason}", "yel")
             time.sleep(0.3)
             log.close()
@@ -665,7 +666,7 @@ def main() -> None:
         n = 0
     allow = clients_mod.AllowList(appr.dir)
     ctl_name = control_pipe_name(instance)
-    log.log(f"desktop-bridge guardian started instance={instance} pid={os.getpid()} elevated={winapi.is_elevated()} integrity={winapi.integrity_level()} "
+    log.log(f"grok-desktop-bridge guardian started instance={instance} pid={os.getpid()} elevated={winapi.is_elevated()} integrity={winapi.integrity_level()} "
             f"hotkeys={ks.status()['hotkeys']} state_dir={appr.dir} allowed_clients={len(allow.entries())} temp_cleared={n}")
     feed.put("Grok Desktop Bridge guardian - one shared bridge for Grok / Local Computer Assistant (and any allowed MCP client) on this PC. Everything any client does appears here (and in the actions log).", "grn")
     feed.put(f"pid {os.getpid()}  instance {instance}  elevated={winapi.is_elevated()}  integrity={winapi.integrity_level()}  Esc: cancel the call, Esc again: stop the bridge  | hotkeys: {' / '.join(ks.combos)}", "dim")
@@ -745,7 +746,7 @@ def main() -> None:
                             reply = {"ok": False, "reason": f"the user did not allow client '{client['label']}'"}
                             win32file.WriteFile(h, (json.dumps(reply) + "\n").encode())
                             return
-                pipe = "desktop-bridge-" + secrets.token_hex(16)
+                pipe = brand.PIPE_PREFIX + "-" + secrets.token_hex(16)
                 token = secrets.token_hex(24)
                 pin = _create_pipe(pipe + "-in", True)
                 pout = _create_pipe(pipe + "-out", False)

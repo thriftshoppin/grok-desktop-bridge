@@ -182,7 +182,8 @@ class PipeNames(unittest.TestCase):
     def test_control_pipe_name_has_instance_and_user(self):
         from desktop_bridge import worker
         with mock.patch.dict(os.environ, {"USERNAME": "Someone"}):
-            self.assertEqual(worker.control_pipe_name("main"), "desktop-bridge-ctl-main-someone")
+            self.assertEqual(worker.control_pipe_name("grok"), "grok-desktop-bridge-ctl-grok-someone")
+        self.assertEqual(worker.control_pipe_name("main"), "grok-desktop-bridge-ctl-main-someone")
             self.assertNotEqual(worker.control_pipe_name("main"), worker.control_pipe_name("t1"))
 
 

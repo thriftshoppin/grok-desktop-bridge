@@ -60,7 +60,7 @@ class Bridge:
         self.protected = [os.path.expandvars(p) for p in self.protected]
         # built-in protection that does not depend on what config.json lists (nor on MSIX path redirection)
         from . import config as _cfg
-        pd = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "DesktopBridge")
+        pd = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "GrokDesktopBridge")
         self.protected += [pd] + policy.Approval.legacy_dirs() + [os.path.join(_cfg.ROOT, n) for n in ("config.json", "config.local.json", "skills", "SECURITY.md", os.path.join("docs", "SECURITY.md"))]
         self.downloads_mode: str = cfg.get("downloads", "ask")
         self.overlay = None   # set by worker

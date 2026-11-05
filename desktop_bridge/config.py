@@ -25,5 +25,5 @@ def load(root: str = ROOT) -> dict:
         if os.path.exists(p):
             with open(p, "r", encoding="utf-8") as f:
                 cfg = _merge(cfg, json.load(f))
-    cfg["temp_dir"] = os.path.expandvars(cfg.get("temp_dir", r"%TEMP%\desktop-bridge"))
+    cfg["temp_dir"] = os.path.expandvars(cfg.get("temp_dir", r"%TEMP%\GrokDesktopBridge"))
     return cfg

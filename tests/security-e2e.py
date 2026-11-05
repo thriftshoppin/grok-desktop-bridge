@@ -36,7 +36,7 @@ def record(name: str, ok: bool, detail: str = "") -> None:
 
 
 def ctl_name(inst: str) -> str:
-    return r"\\.\pipe" + "\\" + f"desktop-bridge-ctl-{inst}-{os.environ.get('USERNAME', 'user').lower()}"
+    return r"\\.\pipe" + "\\" + f"grok-desktop-bridge-ctl-{inst}-{os.environ.get('USERNAME', 'user').lower()}"
 
 
 class Squatter:

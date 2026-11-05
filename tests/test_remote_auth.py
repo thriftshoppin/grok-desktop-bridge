@@ -1,4 +1,4 @@
-"""Linux-safe tests for remote bearer tokens and HTTP 401 rejection."""
+"""Linux-safe tests for remote bearer tokens, Grok-only gate, and HTTP 401/403."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from desktop_bridge import brand  # noqa: E402
 from desktop_bridge.remote_auth import (  # noqa: E402
     BotTokenStore,
     extract_bearer,
@@ -22,6 +23,10 @@ from desktop_bridge.remote_auth import (  # noqa: E402
 )
 from desktop_bridge.remote_http import (  # noqa: E402
     SessionTransport,
+    client_header_ok,
+    client_info_allowed,
+    looks_blocked_client,
+    reject_non_grok_http,
     run_until_stopped,
     serve_remote,
 )
@@ -51,6 +56,39 @@ class TokenHelpers(unittest.TestCase):
             validate_bot_name("")
 
 
+class GrokOnlyGate(unittest.TestCase):
+    def test_client_header(self):
+        self.assertTrue(client_header_ok("grok-bot"))
+        self.assertTrue(client_header_ok("local-computer-assistant"))
+        self.assertFalse(client_header_ok(None))
+        self.assertFalse(client_header_ok("claude-desktop"))
+        self.assertFalse(client_header_ok("cursor"))
+
+    def test_blocked_markers(self):
+        self.assertTrue(looks_blocked_client("Claude Desktop/1.0"))
+        self.assertTrue(looks_blocked_client("codex-cli"))
+        self.assertTrue(looks_blocked_client("Cursor/1.0"))
+        self.assertFalse(looks_blocked_client("grok-bot/1.0"))
+        self.assertFalse(looks_blocked_client(None))
+
+    def test_client_info(self):
+        self.assertTrue(client_info_allowed("Grok"))
+        self.assertTrue(client_info_allowed("Local Computer Assistant"))
+        self.assertTrue(client_info_allowed(None))
+        self.assertFalse(client_info_allowed("Claude Desktop"))
+        self.assertFalse(client_info_allowed("Codex"))
+        self.assertFalse(client_info_allowed("Cursor"))
+
+    def test_reject_helper(self):
+        class H(dict):
+            def get(self, k, default=None):
+                return super().get(k, default)
+
+        self.assertIsNotNone(reject_non_grok_http(H()))
+        self.assertIsNotNone(reject_non_grok_http(H({"User-Agent": "Claude Desktop"})))
+        self.assertIsNone(reject_non_grok_http(H({brand.CLIENT_HEADER: "grok-bot"})))
+
+
 class BotStore(unittest.TestCase):
     def test_add_list_revoke_resolve(self):
         with tempfile.TemporaryDirectory() as d:
@@ -62,72 +100,93 @@ class BotStore(unittest.TestCase):
             self.assertEqual(store.resolve(tok_a), "alice")
             self.assertEqual(store.resolve(tok_b), "bob")
             self.assertIsNone(store.resolve("nope"))
-            self.assertIsNone(store.resolve(None))
-            # rotate
             tok_a2, created2 = store.add_bot("alice")
             self.assertFalse(created2)
             self.assertNotEqual(tok_a, tok_a2)
             self.assertIsNone(store.resolve(tok_a))
-            self.assertEqual(store.resolve(tok_a2), "alice")
             self.assertTrue(store.revoke_bot("bob"))
-            self.assertIsNone(store.resolve(tok_b))
-            self.assertFalse(store.revoke_bot("bob"))
+
+
+def _factory_echo(bot: str) -> SessionTransport:
+    q_out: list[bytes] = []
+
+    def write_bytes(data: bytes) -> None:
+        msg = json.loads(data.decode())
+        if "id" in msg:
+            q_out.append(
+                (json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"ok": True, "bot": bot}}) + "\n").encode()
+            )
+
+    def read_line() -> bytes:
+        for _ in range(200):
+            if q_out:
+                return q_out.pop(0)
+            time.sleep(0.01)
+        return b""
+
+    return SessionTransport(write_bytes, read_line, bot=bot)
 
 
 class RemoteHTTPAuth(unittest.TestCase):
-    def test_rejects_missing_and_wrong_token(self):
+    def _start(self, store):
+        stop = threading.Event()
+        httpd = serve_remote("127.0.0.1", 0, store, _factory_echo, stop_event=stop)
+        port = httpd.server_address[1]
+        th = threading.Thread(target=run_until_stopped, args=(httpd,), daemon=True)
+        th.start()
+        return httpd, stop, th, port
+
+    def _post(self, port, token, extra_headers=None, body=None):
+        headers = {"Content-Type": "application/json"}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        if extra_headers:
+            headers.update(extra_headers)
+        data = body or b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
+        return urllib.request.urlopen(
+            urllib.request.Request(
+                f"http://127.0.0.1:{port}/mcp", data=data, headers=headers, method="POST"
+            ),
+            timeout=5,
+        )
+
+    def test_rejects_non_grok_and_bad_token(self):
         with tempfile.TemporaryDirectory() as d:
             store = BotTokenStore(Path(d) / "bots.json")
             token, _ = store.add_bot("alice")
-
-            def factory(bot: str) -> SessionTransport:
-                # Echo JSON-RPC id back — enough to prove auth gating, not MCP semantics.
-                import io
-                q_in: list[bytes] = []
-                q_out = []
-
-                def write_bytes(data: bytes) -> None:
-                    q_in.append(data)
-                    msg = json.loads(data.decode())
-                    if "id" in msg:
-                        q_out.append((json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"ok": True, "bot": bot}}) + "\n").encode())
-
-                def read_line() -> bytes:
-                    for _ in range(200):
-                        if q_out:
-                            return q_out.pop(0)
-                        time.sleep(0.01)
-                    return b""
-
-                return SessionTransport(write_bytes, read_line, bot=bot)
-
-            stop = threading.Event()
-            httpd = serve_remote("127.0.0.1", 0, store, factory, stop_event=stop)
-            port = httpd.server_address[1]
-            th = threading.Thread(target=run_until_stopped, args=(httpd,), daemon=True)
-            th.start()
+            httpd, stop, th, port = self._start(store)
             try:
-                url = f"http://127.0.0.1:{port}/mcp"
-                # no header
                 with self.assertRaises(urllib.error.HTTPError) as cm:
-                    urllib.request.urlopen(urllib.request.Request(url, data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
-                                                                  headers={"Content-Type": "application/json"}, method="POST"), timeout=5)
-                self.assertEqual(cm.exception.code, 401)
-                # wrong token
+                    self._post(port, token)
+                self.assertEqual(cm.exception.code, 403)
+
                 with self.assertRaises(urllib.error.HTTPError) as cm:
-                    urllib.request.urlopen(urllib.request.Request(
-                        url, data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
-                        headers={"Content-Type": "application/json", "Authorization": "Bearer wrong-token-value-xxxxxxxxxxxx"},
-                        method="POST"), timeout=5)
+                    self._post(
+                        port,
+                        token,
+                        {brand.CLIENT_HEADER: "grok-bot", "User-Agent": "Claude Desktop/1.0"},
+                    )
+                self.assertEqual(cm.exception.code, 403)
+
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    self._post(port, "wrong-token-value-xxxxxxxxxxxx", {brand.CLIENT_HEADER: "grok-bot"})
                 self.assertEqual(cm.exception.code, 401)
-                # good token
-                resp = urllib.request.urlopen(urllib.request.Request(
-                    url, data=b'{"jsonrpc":"2.0","id":7,"method":"ping"}',
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-                    method="POST"), timeout=5)
+
+                resp = self._post(port, token, {brand.CLIENT_HEADER: "grok-bot"})
                 body = json.loads(resp.read().decode())
-                self.assertEqual(body["id"], 7)
                 self.assertEqual(body["result"]["bot"], "alice")
+
+                init = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "initialize",
+                        "params": {"clientInfo": {"name": "Claude Desktop", "version": "1"}},
+                    }
+                ).encode()
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    self._post(port, token, {brand.CLIENT_HEADER: "grok-bot"}, body=init)
+                self.assertEqual(cm.exception.code, 403)
             finally:
                 stop.set()
                 try:

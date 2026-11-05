@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Grok-only remote + isolation:** remote HTTP requires `X-Grok-Bridge-Client`; rejects Claude/Codex/Cursor UA/`clientInfo`. Defaults: instance `grok`, port **8790**, `GrokDesktopBridge` paths/pipes/mutex/task; Claude log paths removed from `config.json`. Docs warn never to share tunnel URL+token.
 - **White pulsing overlay:** border pulses smoothly grey↔white; label is exactly `Grok is using your computer. Press Esc to Stop`. Halo is white. Feed accents use a high-contrast black/white palette. Config default `overlay.color` is `#FFFFFF`.
 - **Remote mode (opt-in):** `launcher.py --remote` serves the same MCP tool set over streamable-HTTP on `127.0.0.1` with Bearer auth. Esc / feed close stops the HTTP server and every session. Documented tunnel: `cloudflared tunnel --url http://127.0.0.1:<port>`. See `docs/REMOTE_QUICKSTART.md`.
 - **Multi-bot tokens:** `--add-bot` / `--list-bots` / `--revoke-bot`; each remote call tagged with the bot name in the feed and logs; shared guardian and kill switch. Generic client skill: `skills/grok-bridge-client/SKILL.md`.

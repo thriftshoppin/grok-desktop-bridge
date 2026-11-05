@@ -1,8 +1,8 @@
 {
   "log": {
-    "enabled": true,
-    "script": "C:\\Users\\SysAdmin\\Claude\\log-tools\\Add-ClaudeLog.ps1",
-    "section": "desktop-bridge",
+    "enabled": false,
+    "script": null,
+    "section": "grok-desktop-bridge",
     "log_typed_text": false,
     "fail_closed": true,
     "max_entry_chars": 700
@@ -21,19 +21,14 @@
     "LastPass*"
   ],
   "protected_paths": [
-    "C:\\Users\\SysAdmin\\Claude\\claude-actions-log.md",
-    "C:\\Users\\SysAdmin\\Claude\\log-tools",
-    "C:\\Users\\SysAdmin\\tools\\claude-desktop-bridge\\config.json",
-    "C:\\Users\\SysAdmin\\tools\\claude-desktop-bridge\\config.local.json",
-    "C:\\Users\\SysAdmin\\tools\\claude-desktop-bridge\\skills",
-    "C:\\Users\\SysAdmin\\tools\\claude-desktop-bridge\\SECURITY.md",
-    "%LOCALAPPDATA%\\desktop-bridge"
+    "%LOCALAPPDATA%\\GrokDesktopBridge",
+    "%ProgramData%\\GrokDesktopBridge"
   ],
   "audio": {
     "device": null,
     "probe_ms": 150
   },
-  "temp_dir": "%TEMP%\\desktop-bridge",
+  "temp_dir": "%TEMP%\\GrokDesktopBridge",
   "retention_hours": 24,
   "screenshot": {
     "max_edge": 1568,
@@ -64,6 +59,7 @@
   "remote": {
     "enabled": false,
     "host": "127.0.0.1",
-    "port": 8765
+    "port": 8790,
+    "grok_only": true
   }
 }

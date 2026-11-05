@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from . import brand
 from .remote_auth import BotTokenStore, extract_bearer
 
 # Origins we accept when the Origin header is present (DNS-rebinding guard).
@@ -123,6 +124,53 @@ SessionFactory = Callable[[str], SessionTransport]
 # factory(bot_name) -> SessionTransport for that bot (opens a guardian session)
 
 
+
+def _norm_client(s: str | None) -> str:
+    return (s or "").strip().lower()
+
+
+def client_header_ok(value: str | None) -> bool:
+    return _norm_client(value) in brand.ALLOWED_CLIENT_HEADERS
+
+
+def looks_blocked_client(text: str | None) -> bool:
+    t = _norm_client(text)
+    if not t:
+        return False
+    return any(m in t for m in brand.BLOCKED_CLIENT_MARKERS)
+
+
+def client_info_allowed(name: str | None) -> bool:
+    """True if missing (some HTTP probes) or clearly a Grok / Local Computer Assistant client."""
+    if name is None or str(name).strip() == "":
+        return True  # header gate is mandatory; initialize checked when name present
+    n = _norm_client(name)
+    if looks_blocked_client(n):
+        return False
+    if n in brand.ALLOWED_CLIENT_INFO_NAMES:
+        return True
+    # allow names that start with grok / local computer assistant
+    if n.startswith("grok") or n.startswith("local computer assistant") or n.startswith("local-computer-assistant"):
+        return True
+    return False
+
+
+def reject_non_grok_http(headers) -> str | None:
+    """Return an error message if this remote HTTP client is not a Grok Bot; else None."""
+    ua = headers.get("User-Agent") if hasattr(headers, "get") else None
+    if looks_blocked_client(ua):
+        return "remote mode is Grok Bot only; this User-Agent is not allowed"
+    hdr = None
+    if hasattr(headers, "get"):
+        hdr = headers.get(brand.CLIENT_HEADER) or headers.get(brand.CLIENT_HEADER.lower())
+    if not client_header_ok(hdr):
+        return (
+            f"remote mode is Grok Bot only; missing or invalid {brand.CLIENT_HEADER} "
+            f"(expected one of: {', '.join(sorted(brand.ALLOWED_CLIENT_HEADERS))})"
+        )
+    return None
+
+
 def origin_allowed(origin: str | None) -> bool:
     if origin is None or origin == "":
         return True
@@ -203,6 +251,10 @@ class _RemoteHandler(BaseHTTPRequestHandler):
         if not origin_allowed(self.headers.get("Origin")):
             self._reject(403, "Origin not allowed")
             return None
+        why = reject_non_grok_http(self.headers)
+        if why:
+            self._reject(403, why)
+            return None
         provided = extract_bearer(self.headers.get("Authorization"))
         bot = self.server.store.resolve(provided)
         if bot is None:
@@ -225,7 +277,8 @@ class _RemoteHandler(BaseHTTPRequestHandler):
             "name": "grok-desktop-bridge",
             "bot": bot,
             "transport": "streamable-http",
-            "message": "POST JSON-RPC to /mcp with Authorization: Bearer <bot-token>",
+            "message": "POST JSON-RPC to /mcp with Authorization: Bearer <bot-token> and X-Grok-Bridge-Client: grok-bot",
+            "grok_only": True,
         }).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -253,6 +306,15 @@ class _RemoteHandler(BaseHTTPRequestHandler):
         if not isinstance(message, dict):
             self._reject(400, "body must be a JSON-RPC object")
             return
+
+        if message.get("method") == "initialize":
+            params = message.get("params") or {}
+            info = (params.get("clientInfo") or {}) if isinstance(params, dict) else {}
+            cname = info.get("name") if isinstance(info, dict) else None
+            if not client_info_allowed(cname):
+                self.server.on_log(f"[{bot}] rejected non-Grok MCP clientInfo.name={cname!r}")
+                self._reject(403, "remote mode is Grok Bot / Local Computer Assistant only; MCP clientInfo rejected")
+                return
 
         if bot not in self.server._announced:
             self.server._announced.add(bot)

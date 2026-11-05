@@ -20,8 +20,9 @@ import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SELF_PID = os.getpid()
-TASK_NAME = "DesktopBridgeWorker"
-INSTANCE = os.environ.get("DESKTOP_BRIDGE_INSTANCE", "main")
+from desktop_bridge import brand as _brand
+TASK_NAME = _brand.TASK_NAME
+INSTANCE = os.environ.get("DESKTOP_BRIDGE_INSTANCE", _brand.INSTANCE_DEFAULT)
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 k32.CreateMutexW.restype = wt.HANDLE
 
@@ -137,7 +138,7 @@ def is_admin() -> bool:
 
 
 def control_path() -> str:
-    return r"\\.\pipe" + "\\" + f"desktop-bridge-ctl-{INSTANCE}-{os.environ.get('USERNAME', 'user').lower()}"
+    return r"\\.\pipe" + "\\" + f"{_brand.PIPE_PREFIX}-ctl-{INSTANCE}-{os.environ.get('USERNAME', 'user').lower()}"
 
 
 def start_guardian():
@@ -213,7 +214,7 @@ def open_control(timeout: float = 60.0):
     f = open_existing(deadline)
     if f:
         return f
-    lock = k32.CreateMutexW(None, False, f"Local\\DesktopBridgeStart-{INSTANCE}")
+    lock = k32.CreateMutexW(None, False, f"{_brand.MUTEX_START_PREFIX}-{INSTANCE}")
     got = False
     try:
         got = k32.WaitForSingleObject(lock, 45000) in (0, 0x80)  # WAIT_OBJECT_0 / WAIT_ABANDONED
@@ -226,7 +227,7 @@ def open_control(timeout: float = 60.0):
             if f:
                 return f
             time.sleep(0.2 if f is None else 0.05)
-        raise RuntimeError("the guardian did not come up (control pipe never appeared); see its window or %TEMP%\\desktop-bridge\\worker-<pid>.log")
+        raise RuntimeError("the guardian did not come up (control pipe never appeared); see its window or %TEMP%\\GrokDesktopBridge\\worker-<pid>.log")
     finally:
         if got:
             k32.ReleaseMutex(lock)
@@ -409,10 +410,11 @@ def run_remote(host: str, port: int) -> int:
 
         return SessionTransport(write_bytes, read_line, on_event=on_log, bot=bot)
 
-    print(f"[grok-desktop-bridge] remote mode: http://{host}:{port}/mcp  (loopback only)")
+    print(f"[grok-desktop-bridge] remote mode: http://{host}:{port}/mcp  (loopback only; instance={INSTANCE})")
     print("[grok-desktop-bridge] expose with an OUTBOUND tunnel, e.g.:")
     print(f"    cloudflared tunnel --url http://127.0.0.1:{port}")
-    print("[grok-desktop-bridge] hand the public HTTPS URL + a bot Bearer token to the cloud bot.")
+    print("[grok-desktop-bridge] Grok Bot cloud ONLY — do NOT share URL+token with other people, free accounts, Claude, Codex, or Cursor.")
+    print("[grok-desktop-bridge] Clients must send header X-Grok-Bridge-Client: grok-bot plus Authorization: Bearer <token>.")
     print("[grok-desktop-bridge] Esc in the guardian feed stops ALL bots and this HTTP server.")
 
     httpd = serve_remote(host, port, store, session_factory, on_log=on_log, stop_event=stop)
@@ -463,8 +465,8 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Grok Desktop Bridge launcher (stdio MCP or --remote HTTP)")
     ap.add_argument("--remote", action="store_true", help="serve MCP over streamable-HTTP on 127.0.0.1 (Bearer token required)")
-    ap.add_argument("--host", default="127.0.0.1", help="remote bind host (loopback only)")
-    ap.add_argument("--port", type=int, default=8765, help="remote bind port (default 8765)")
+    ap.add_argument("--host", default=_brand.REMOTE_HOST_DEFAULT, help="remote bind host (loopback only)")
+    ap.add_argument("--port", type=int, default=_brand.REMOTE_PORT_DEFAULT, help=f"remote bind port (default {_brand.REMOTE_PORT_DEFAULT})")
     ap.add_argument("--add-bot", metavar="NAME", help="create/rotate a named bot token and print it")
     ap.add_argument("--list-bots", action="store_true", help="list named bot tokens (prefixes only)")
     ap.add_argument("--revoke-bot", metavar="NAME", help="delete a named bot token")

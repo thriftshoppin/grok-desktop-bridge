@@ -134,7 +134,7 @@ class Overlay:
         self._brush = {"white": None, "grey": None, "red": None, "yellow": None, "pulse": None}
         self._pulse_brush_color = None  # last COLORREF used for the pulsing active border
         self._font_cache: dict[int, int] = {}
-        self._cls = "DesktopBridgeOverlay"
+        self._cls = "GrokDesktopBridgeOverlay"
         self._wndproc = WNDPROC(self._proc)
         self._thread = threading.Thread(target=self._run, name="overlay", daemon=True)
         self._shown_evt = threading.Event()
@@ -262,7 +262,7 @@ class Overlay:
 
     def _make(self, x, y, w, h, kind, mon) -> dict:
         ex = WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE
-        hwnd = u32.CreateWindowExW(ex, self._cls, "DesktopBridgeOverlay", WS_POPUP, x, y, w, h, None, None, k32.GetModuleHandleW(None), None)
+        hwnd = u32.CreateWindowExW(ex, self._cls, "GrokDesktopBridgeOverlay", WS_POPUP, x, y, w, h, None, None, k32.GetModuleHandleW(None), None)
         if not hwnd:
             raise OSError(f"CreateWindowExW failed ({ctypes.get_last_error()}) for {kind} on monitor {mon.id}")
         if kind != "halo":
