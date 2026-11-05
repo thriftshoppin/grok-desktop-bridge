@@ -234,6 +234,174 @@ function Test-PythonSupported {
     return @{ Ok = $true; Reason = "64-bit CPython $Major.$Minor is supported (3.12, 3.13, 3.14) with win_amd64 wheels." }
 }
 
+$script:PythonProbeCode = "import sys,struct,platform; print('GROKPY|%s|%s|%s|%s|%s' % (sys.version_info[0], sys.version_info[1], struct.calcsize('P')*8, platform.python_implementation(), sys.executable))"
+
+function Format-ProcessArgument {
+    param([string]$Text)
+    if ($null -eq $Text) { return '""' }
+    if ($Text -notmatch '[\s"]') { return $Text }
+    return '"' + ($Text.Replace('"', '\"')) + '"'
+}
+
+function Invoke-CapturedProcess {
+    # Stderr stays a string. It must not become a PowerShell error record:
+    # the Python install manager writes "[ERROR] No runtime installed..." for a
+    # missing py -3.x, and $ErrorActionPreference Stop would otherwise abort the search.
+    param([string]$FileName, [string]$Arguments)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FileName
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    [void]$proc.WaitForExit()
+    return @{ ExitCode = [int]$proc.ExitCode; Stdout = [string]$stdout; Stderr = [string]$stderr }
+}
+
+function Get-GrokPyRecord {
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    foreach ($line in ($Text -split "\r?\n")) {
+        $trim = $line.Trim()
+        if ($trim.StartsWith("GROKPY|")) { return $trim }
+    }
+    return $null
+}
+
+function Get-PythonInstallCandidates {
+    param([string]$LocalAppData, [string]$UserProfile)
+    $roots = New-Object System.Collections.Generic.List[string]
+    if ($LocalAppData) {
+        $roots.Add((Join-Path $LocalAppData "Python"))
+        $roots.Add((Join-Path (Join-Path $LocalAppData "Programs") "Python"))
+    }
+    if ($UserProfile) {
+        $local = Join-Path (Join-Path $UserProfile "AppData") "Local"
+        $roots.Add((Join-Path $local "Python"))
+        $roots.Add((Join-Path (Join-Path $local "Programs") "Python"))
+    }
+    $middles = @(
+        "pythoncore-3.14-64", "pythoncore-3.13-64", "pythoncore-3.12-64",
+        "Python314", "Python313", "Python312"
+    )
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($root in $roots) {
+        foreach ($middle in $middles) {
+            $path = Join-Path (Join-Path $root $middle) "python.exe"
+            if (Test-Path -LiteralPath $path) { $out.Add($path) }
+        }
+    }
+    return $out
+}
+
+function Test-WindowsStoreStub {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    $key = $Path.Replace("/", "\").ToLowerInvariant()
+    return ($key.Contains("\windowsapps\python.exe") -or $key.Contains("\windowsapps\python3.exe"))
+}
+
+function Find-SupportedPython {
+    param(
+        [string]$Launcher,
+        [string]$LocalAppData,
+        [string]$UserProfile,
+        [string[]]$ExtraExecutables = @()
+    )
+    $notes = New-Object System.Collections.Generic.List[string]
+    $hits = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+
+    function Add-Hit {
+        param($RecordLine, [string]$Label)
+        $bits = $RecordLine.Split("|")
+        if ($bits.Count -lt 6) {
+            $notes.Add("$Label returned a short GROKPY record.")
+            return
+        }
+        $assess = Test-PythonSupported -Major ([int]$bits[1]) -Minor ([int]$bits[2]) -Bits ([int]$bits[3]) -Implementation $bits[4]
+        $exe = $bits[5]
+        $notes.Add("$Label -> $exe : $($assess.Reason)")
+        if ($assess.Ok) {
+            $hits.Add([pscustomobject]@{ Path = $exe; Minor = [int]$bits[2]; Label = $Label })
+        }
+    }
+
+    if ($Launcher -and (Test-Path -LiteralPath $Launcher)) {
+        foreach ($spec in @("-3.14", "-3.13", "-3.12")) {
+            $args = (Format-ProcessArgument $spec) + " -c " + (Format-ProcessArgument $script:PythonProbeCode)
+            try {
+                $run = Invoke-CapturedProcess -FileName $Launcher -Arguments $args
+            } catch {
+                $notes.Add("py $spec could not be started: $($_.Exception.Message)")
+                continue
+            }
+            $record = Get-GrokPyRecord $run.Stdout
+            if (-not $record) { $record = Get-GrokPyRecord $run.Stderr }
+            if ($run.ExitCode -ne 0 -or -not $record) {
+                $detail = ($run.Stderr + " " + $run.Stdout).Trim()
+                if (-not $detail) { $detail = "exit $($run.ExitCode)" }
+                $notes.Add("py $spec not usable (exit $($run.ExitCode)): $detail")
+                continue
+            }
+            Add-Hit $record "py $spec"
+        }
+    } else {
+        $notes.Add("Python launcher 'py' was not found. Looking for installed python.exe copies.")
+    }
+
+    $direct = New-Object System.Collections.Generic.List[string]
+    foreach ($path in @(Get-PythonInstallCandidates -LocalAppData $LocalAppData -UserProfile $UserProfile)) { $direct.Add($path) }
+    foreach ($path in @($ExtraExecutables)) { if ($path) { $direct.Add($path) } }
+    foreach ($path in $direct) {
+        $key = ConvertTo-PathKey $path
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        if (Test-WindowsStoreStub $path) {
+            $notes.Add("skip store stub: $path")
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $path)) {
+            $notes.Add("missing: $path")
+            continue
+        }
+        $args = "-c " + (Format-ProcessArgument $script:PythonProbeCode)
+        try {
+            $run = Invoke-CapturedProcess -FileName $path -Arguments $args
+        } catch {
+            $notes.Add("direct $path could not be started: $($_.Exception.Message)")
+            continue
+        }
+        $record = Get-GrokPyRecord $run.Stdout
+        if (-not $record) { $record = Get-GrokPyRecord $run.Stderr }
+        if ($run.ExitCode -ne 0 -or -not $record) {
+            $detail = ($run.Stderr + " " + $run.Stdout).Trim()
+            if (-not $detail) { $detail = "exit $($run.ExitCode)" }
+            $notes.Add("direct $path not usable (exit $($run.ExitCode)): $detail")
+            continue
+        }
+        Add-Hit $record "direct $path"
+    }
+
+    $best = $null
+    foreach ($hit in $hits) {
+        if ((-not $best) -or ($hit.Minor -gt $best.Minor)) { $best = $hit }
+    }
+    if ($best) {
+        return @{ Path = [string]$best.Path; Notes = $notes }
+    }
+    $text = "No supported Python remained after checking every candidate. A missing py -3.x runtime does not stop the search; none of the interpreters found were 64-bit CPython 3.12, 3.13, or 3.14."
+    foreach ($note in $notes) { $text = $text + "`n" + $note }
+    $text = $text + "`ndxcam==0.3.0 has win_amd64 wheels for 3.12-3.14 only. This installer does not compile from source and does not run py install."
+    throw $text
+}
+
 function Get-RunAsFailureAction {
     param([int]$WinError)
     if ($WinError -eq 1223) { return "abort" }
@@ -649,6 +817,76 @@ function Invoke-GrokBridgeSelfTest {
     }
     Assert-SelfTest $threw "Invoke-Native must stop on native failure"
     Assert-SelfTest ($caught -match "exit code 9") ("message should carry exit code 9: " + $caught)
+
+    $pyRoot = Join-Path ([IO.Path]::GetTempPath()) ("grok-pyprobe-" + [guid]::NewGuid().ToString("n"))
+    New-Item -ItemType Directory -Path $pyRoot | Out-Null
+    try {
+        $fakePy = Join-Path $pyRoot "py"
+        $fakeBody = @'
+#!/bin/sh
+args="$*"
+if printf '%s' "$args" | grep -q -- '-3.13'; then
+  echo '[ERROR] No runtime installed that matches 3.13. Try running "py install 3.13".' >&2
+  exit 1
+fi
+if printf '%s' "$args" | grep -q -- '-3.12'; then
+  echo '[ERROR] No runtime installed that matches 3.12. Try running "py install 3.12".' >&2
+  exit 1
+fi
+if printf '%s' "$args" | grep -q -- '-3.14'; then
+  if [ "$FAKE_PY_314" = "missing" ]; then
+    echo '[ERROR] No runtime installed that matches 3.14. Try running "py install 3.14".' >&2
+    exit 1
+  fi
+  echo "GROKPY|3|14|64|CPython|$FAKE_PY_EXE"
+  exit 0
+fi
+echo "GROKPY|3|14|64|CPython|$FAKE_PY_EXE"
+exit 0
+'@
+        [IO.File]::WriteAllText($fakePy, ($fakeBody -replace "`r`n", "`n"))
+        & /bin/chmod a+x $fakePy
+        Assert-SelfTest ($LASTEXITCODE -eq 0) "chmod fake py"
+        $env:FAKE_PY_314 = "present"
+        $env:FAKE_PY_EXE = (Join-Path $pyRoot "from-py-3.14")
+        $found = Find-SupportedPython -Launcher $fakePy -LocalAppData (Join-Path $pyRoot "empty-local") -UserProfile ""
+        Assert-SelfTest ($found.Path -eq $env:FAKE_PY_EXE) ("3.13 failure must not hide 3.14, got " + $found.Path)
+        $noteText = ""
+        foreach ($note in $found.Notes) { $noteText = $noteText + "`n" + $note }
+        Assert-SelfTest ($noteText.Contains('[ERROR] No runtime installed that matches 3.13. Try running "py install 3.13".')) "exact 3.13 manager error is recorded"
+
+        $env:FAKE_PY_314 = "missing"
+        $localPy = Join-Path (Join-Path (Join-Path $pyRoot "Local") "Python") "pythoncore-3.14-64"
+        New-Item -ItemType Directory -Path $localPy | Out-Null
+        $coreExe = Join-Path $localPy "python.exe"
+        $coreBody = @'
+#!/bin/sh
+echo "GROKPY|3|14|64|CPython|$0"
+exit 0
+'@
+        [IO.File]::WriteAllText($coreExe, ($coreBody -replace "`r`n", "`n"))
+        & /bin/chmod a+x $coreExe
+        $found2 = Find-SupportedPython -Launcher $fakePy -LocalAppData (Join-Path $pyRoot "Local") -UserProfile ""
+        Assert-SelfTest ($found2.Path -eq $coreExe) ("pythoncore-3.14-64 must be used when py -3.14 is missing, got " + $found2.Path)
+
+        $env:FAKE_PY_314 = "missing"
+        $threwPy = $false
+        $pyMsg = ""
+        try {
+            Find-SupportedPython -Launcher $fakePy -LocalAppData (Join-Path $pyRoot "nowhere") -UserProfile "" | Out-Null
+        } catch {
+            $threwPy = $true
+            $pyMsg = $_.Exception.Message
+        }
+        Assert-SelfTest $threwPy "no compatible runtime must fail visibly"
+        Assert-SelfTest ($pyMsg.Contains("No supported Python remained")) "visible summary"
+        Assert-SelfTest ($pyMsg.Contains("matches 3.13")) "3.13 attempt is in the failure"
+        Assert-SelfTest ($pyMsg.Contains("matches 3.14")) "3.14 attempt is in the failure"
+    } finally {
+        Remove-Item Env:FAKE_PY_314 -ErrorAction SilentlyContinue
+        Remove-Item Env:FAKE_PY_EXE -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $pyRoot) { Remove-TreeNoReparse -Path $pyRoot }
+    }
     Write-GrokStep "SELFTEST ok"
     return 0
 }

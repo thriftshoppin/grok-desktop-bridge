@@ -17,7 +17,8 @@ param(
     [switch]$SelfTest,
     [string]$ConfirmPhrase = "",
     [string]$InstallDir = "",
-    [string[]]$IncludeOtherClientPath = @()
+    [string[]]$IncludeOtherClientPath = @(),
+    [switch]$SkipCleanup
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,63 +59,16 @@ function Start-GrokTranscript {
 }
 
 function Get-LivePython {
-    $chosen = $null
-    $notes = New-Object System.Collections.Generic.List[string]
+    $launcher = ""
     $py = Get-Command py -ErrorAction SilentlyContinue
-    $specs = @("-3.14", "-3.13", "-3.12")
-    if ($py) {
-        foreach ($spec in $specs) {
-            $out = & $py.Source $spec -c "import sys,struct,platform; print('GROKPY|%s|%s|%s|%s|%s' % (sys.version_info[0], sys.version_info[1], struct.calcsize('P')*8, platform.python_implementation(), sys.executable))" 2>&1
-            $code = $LASTEXITCODE
-            if ($code -ne 0) {
-                $notes.Add("py $spec is not installed (exit $code).")
-                continue
-            }
-            $line = $null
-            foreach ($row in @($out)) {
-                $text = "$row"
-                if ($text.StartsWith("GROKPY|")) { $line = $text }
-            }
-            if (-not $line) {
-                $notes.Add("py $spec returned no GROKPY record.")
-                continue
-            }
-            $bits = $line.Split("|")
-            $assess = Test-PythonSupported -Major ([int]$bits[1]) -Minor ([int]$bits[2]) -Bits ([int]$bits[3]) -Implementation $bits[4]
-            $notes.Add("py $spec -> " + $bits[5] + " : " + $assess.Reason)
-            if ($assess.Ok -and -not $chosen) { $chosen = $bits[5] }
-        }
-    } else {
-        $notes.Add("The Python launcher 'py' is not on PATH.")
-    }
-    if (-not $chosen) {
-        $python = Get-Command python -ErrorAction SilentlyContinue
-        if ($python) {
-            $out = & $python.Source -c "import sys,struct,platform; print('GROKPY|%s|%s|%s|%s|%s' % (sys.version_info[0], sys.version_info[1], struct.calcsize('P')*8, platform.python_implementation(), sys.executable))" 2>&1
-            $code = $LASTEXITCODE
-            if ($code -eq 0) {
-                $line = $null
-                foreach ($row in @($out)) {
-                    $text = "$row"
-                    if ($text.StartsWith("GROKPY|")) { $line = $text }
-                }
-                if ($line) {
-                    $bits = $line.Split("|")
-                    $assess = Test-PythonSupported -Major ([int]$bits[1]) -Minor ([int]$bits[2]) -Bits ([int]$bits[3]) -Implementation $bits[4]
-                    $notes.Add("python -> " + $bits[5] + " : " + $assess.Reason)
-                    if ($assess.Ok) { $chosen = $bits[5] }
-                }
-            } else {
-                $notes.Add("python -c failed with exit $code.")
-            }
-        }
-    }
-    foreach ($note in $notes) { Write-Host $note }
-    if (-not $chosen) {
-        throw "No supported Python. Install 64-bit CPython 3.14, 3.13, or 3.12 from https://www.python.org/downloads/windows/ (check Add python.exe to PATH). dxcam==0.3.0 has no win32 wheel and no cp315 wheel; numpy==2.5.4 needs >=3.12. This installer does not compile from source."
-    }
-    Write-Host ("Using Python: " + $chosen)
-    return $chosen
+    if ($py) { $launcher = $py.Source }
+    $extras = @()
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) { $extras += $python.Source }
+    $found = Find-SupportedPython -Launcher $launcher -LocalAppData $env:LOCALAPPDATA -UserProfile $env:USERPROFILE -ExtraExecutables $extras
+    foreach ($note in $found.Notes) { Write-Host $note }
+    Write-Host ("Using Python: " + $found.Path)
+    return $found.Path
 }
 
 function Get-ExplicitTargets {
@@ -161,6 +115,10 @@ function Invoke-FreshInstall {
         Write-Host "WARNING: cloudflared is not on PATH. Install can finish, but the light-switch ON will stop until cloudflared is installed from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
     }
 
+    if ($SkipCleanup) {
+        Write-Host "STEP: skip cleanup. No old installs are listed or removed."
+        $plan = New-Object System.Collections.Generic.List[object]
+    } else {
     $plan = New-Object System.Collections.Generic.List[object]
     Write-Host "STEP: discovery (Desktop and Downloads known folders, plus explicit Grok AppData). Reparse points are not entered."
     foreach ($root in @(Get-DiscoveryRoots)) {
@@ -210,14 +168,18 @@ function Invoke-FreshInstall {
     } else {
         Write-Host "No removable targets."
     }
+    }
 
     $same = (ConvertTo-PathKey $package) -eq (ConvertTo-PathKey $InstallDir)
     if ($same) {
         Write-Host "Package is already the install directory. Files stay; the venv is recreated."
     } else {
-        if (Test-Path -LiteralPath $InstallDir) {
+        if ((Test-Path -LiteralPath $InstallDir) -and -not $SkipCleanup) {
             if (Test-ReparsePoint $InstallDir) { throw "install directory is a reparse point; refusing to replace it" }
             Remove-TreeNoReparse -Path $InstallDir
+        }
+        if ((Test-Path -LiteralPath $InstallDir) -and $SkipCleanup -and (Test-ReparsePoint $InstallDir)) {
+            throw "install directory is a reparse point; refusing to copy into it"
         }
         Write-Host ("STEP: copy package to " + $InstallDir)
         Copy-TreeNoReparse -Source $package -Destination $InstallDir

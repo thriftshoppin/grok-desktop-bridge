@@ -87,6 +87,10 @@ class StaticContract(unittest.TestCase):
                 self.assertIn("Write-Host", line, "light switch may mention --add-bot only as a manual command")
         self.assertNotIn("remote_bots.json", switch + install + lib)
         self.assertIn("--only-binary=:all:", install)
+        self.assertIn("pythoncore-3.14-64", lib)
+        self.assertIn("Invoke-CapturedProcess", lib)
+        self.assertNotIn("2>&1", install)
+        self.assertIn("SkipCleanup", install)
         self.assertIn("LASTEXITCODE", lib)
         self.assertIn("1223", lib)
 
