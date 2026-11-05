@@ -179,12 +179,19 @@ class CancelledByUser(ToolRefused):
 
 
 class KillSwitch:
-    """Stops everything. Triggers: Esc (only while Grok is 'in control'; polled, never hooked or registered, so the key
-    always reaches the foreground app), the two combos (RegisterHotKey + key-state poll), and the injection gate (lockout)."""
+    """Stops everything. Triggers: Esc (global while Grok is 'in control' — feed focus is not required; polled,
+    never hooked or registered, so the key still reaches the foreground app), the two combos (RegisterHotKey +
+    key-state poll), and the injection gate (lockout).
+
+    Esc edges with Alt/Ctrl/Win held are ignored. A short arm-grace after in_control rises, and a short quiet
+    period after those modifiers are released, filter synthetic Esc from Alt+Tab and overlay show. Esc is not
+    limited to the focused window."""
 
     def __init__(self, hotkeys: list[str], on_trip: Callable[[str], None] | None = None,
                  in_control: Callable[[], bool] | None = None, esc_enabled: bool = True,
-                 inflight: Callable[[], int] | None = None, on_cancel: Callable[[str], None] | None = None, second_press_s: float = 10.0):
+                 inflight: Callable[[], int] | None = None, on_cancel: Callable[[str], None] | None = None,
+                 second_press_s: float = 10.0, esc_arm_grace_s: float = 0.35,
+                 esc_modifier_release_grace_s: float = 0.30):
         from .winapi import MODIFIERS, VK, user32  # noqa
         self._user32 = user32
         self.combos = hotkeys
@@ -201,6 +208,10 @@ class KillSwitch:
         self._inflight = inflight or (lambda: 0)
         self._on_cancel = on_cancel
         self.second_press_s = float(second_press_s)
+        # After in_control arms, ignore Esc briefly so Alt+Tab / overlay-show cannot synthesize a false trip.
+        self.esc_arm_grace_s = float(esc_arm_grace_s)
+        # Synthetic Esc often arrives just after Alt/Ctrl/Win goes up. A real later press still counts.
+        self.esc_modifier_release_grace_s = float(esc_modifier_release_grace_s)
         self.epoch = 0                      # bumped by every stage-1 cancel; calls remember the epoch they started in
         self.last_cancel: float | None = None
         self._tls = threading.local()
@@ -296,7 +307,9 @@ class KillSwitch:
     def status(self) -> dict:
         return {"active": self.active, "source": self.source, "lockout": self.lockout, "since": self.since or None, "trips": self.trips,
                 "esc": {"enabled": self.esc_enabled, "armed": bool(self.esc_enabled and self._in_control()),
-                        "stage": esc_mod.stage(time.monotonic(), self.last_cancel, self.second_press_s, self.active), "second_press_s": self.second_press_s},
+                        "stage": esc_mod.stage(time.monotonic(), self.last_cancel, self.second_press_s, self.active),
+                        "second_press_s": self.second_press_s, "arm_grace_s": self.esc_arm_grace_s,
+                        "modifier_release_grace_s": self.esc_modifier_release_grace_s},
                 "hotkeys": {c: self.registered.get(c, False) for c in self.combos}, "errors": self.errors}
 
     def close(self) -> None:
@@ -335,6 +348,10 @@ class KillSwitch:
                 pass
         was_down = {c: False for c, _ in polls}
         esc_was_down = False
+        was_in_control = False
+        armed_at: float | None = None
+        modifier_down_prev = False
+        modifier_quiet_until: float | None = None
         msg = wt.MSG()
         running = True
         while running:
@@ -350,11 +367,32 @@ class KillSwitch:
                 if down and not was_down[combo]:
                     self.trip(f"key state {combo}")
                 was_down[combo] = down
+            # Esc stays GLOBAL (any foreground app). Filter Alt+Tab/Alt+Esc/Ctrl+Esc and arm-edge synthetics.
             esc_down = bool(user32.GetAsyncKeyState(0x1B) & 0x8000)
-            if esc_down and not esc_was_down and self.esc_enabled and not self.active and self._in_control():
-                if own_esc_age() > 0.12:  # not the bridge's own injected Esc
-                    self.esc_pressed()
-            esc_was_down = esc_down
+            in_ctl = bool(self.esc_enabled and not self.active and self._in_control())
+            alt_down = bool(user32.GetAsyncKeyState(0x12) & 0x8000)   # VK_MENU
+            ctrl_down = bool(user32.GetAsyncKeyState(0x11) & 0x8000)  # VK_CONTROL
+            win_down = bool((user32.GetAsyncKeyState(0x5B) & 0x8000) or (user32.GetAsyncKeyState(0x5C) & 0x8000))
+            modifier_down = bool(alt_down or ctrl_down or win_down)
+            fire, esc_was_down, armed_at, modifier_quiet_until = esc_mod.should_count_esc_edge(
+                esc_down=esc_down,
+                esc_was_down=esc_was_down,
+                in_control=in_ctl,
+                was_in_control=was_in_control,
+                now=time.monotonic(),
+                armed_at=armed_at,
+                arm_grace_s=self.esc_arm_grace_s,
+                alt_down=alt_down,
+                ctrl_down=ctrl_down,
+                win_down=win_down,
+                modifier_down_prev=modifier_down_prev,
+                modifier_quiet_until=modifier_quiet_until,
+                modifier_release_grace_s=self.esc_modifier_release_grace_s,
+            )
+            modifier_down_prev = modifier_down
+            was_in_control = in_ctl
+            if fire and own_esc_age() > 0.12:  # not the bridge's own injected Esc
+                self.esc_pressed()
         for i in ids:
             user32.UnregisterHotKey(None, i)
 

@@ -21,6 +21,7 @@ import time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SELF_PID = os.getpid()
 from desktop_bridge import brand as _brand
+from desktop_bridge.install_logic import UAC_CANCELLED, runas_failure_action
 TASK_NAME = _brand.TASK_NAME
 INSTANCE = os.environ.get("DESKTOP_BRIDGE_INSTANCE", _brand.INSTANCE_DEFAULT)
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -170,6 +171,11 @@ def start_guardian():
     if ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)):
         return sei.hProcess
     code = ctypes.get_last_error() or k32.GetLastError()
+    if runas_failure_action(code) == "abort":
+        raise RuntimeError(
+            f"UAC was cancelled (error {UAC_CANCELLED}). The elevated guardian was not started. "
+            "The scheduled-task fallback was not used."
+        )
     err(f"runas failed (error {code}); trying the scheduled-task fallback '{TASK_NAME}'")
     r = subprocess.run(["schtasks", "/run", "/tn", TASK_NAME], capture_output=True, text=True)
     if r.returncode != 0:
@@ -371,16 +377,27 @@ def run_remote(host: str, port: int) -> int:
     from desktop_bridge.remote_auth import BotTokenStore
     from desktop_bridge.remote_http import SessionTransport, serve_remote, run_until_stopped
 
+    print("[grok-desktop-bridge] starting the elevated guardian (a UAC prompt may appear; Cancel stops this startup)...")
+    sys.stdout.flush()
+    try:
+        ctl = open_control(timeout=180)
+        ctl.close()
+    except Exception as e:
+        err(str(e))
+        return 1
+    print("[grok-desktop-bridge] guardian is up (live action feed).")
+
     store = BotTokenStore()
-    if not store.list_bots():
-        name, token, _ = store.ensure_default("default")
-        print(f"[grok-desktop-bridge] no bots configured; created bot '{name}'")
-        print(f"[grok-desktop-bridge] token: {token}")
-        print(f"[grok-desktop-bridge] store: {store.path}")
+    bots = store.list_bots()
+    if not bots:
+        print("[grok-desktop-bridge] no bot token stored. Remote HTTP will reject every call until you create one.")
+        print("[grok-desktop-bridge] In a window you are watching (do not redirect it into a log file), run:")
+        print(r"    .venv\Scripts\python.exe launcher.py --add-bot work")
+        print("[grok-desktop-bridge] That command prints the token once. This process will not create or print a token.")
     else:
-        print(f"[grok-desktop-bridge] bot tokens loaded from {store.path}")
-        for b in store.list_bots():
-            print(f"[grok-desktop-bridge]   bot={b['name']}  token={b['token_prefix']}")
+        print(f"[grok-desktop-bridge] {len(bots)} bot token(s) loaded from {store.path} (values are not printed)")
+        for b in bots:
+            print(f"[grok-desktop-bridge]   bot={b['name']}  created={b['created']}")
 
     stop = threading.Event()
     sessions = {}  # bot -> (pin, pout) keep FDs alive

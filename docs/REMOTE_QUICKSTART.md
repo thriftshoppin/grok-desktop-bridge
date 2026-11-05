@@ -26,6 +26,10 @@ This install does **not** share pipes, mutexes, AppData, or the scheduled task w
 
 Both bridges can run on the same PC.
 
+## 0. From scratch
+
+Unzip this source and double-click `Install-GrokBridge.cmd`. That removes only the Grok targets it prints (after you confirm) and installs to `%USERPROFILE%\grok-desktop-bridge`. Then double-click the desktop shortcut **Grok Desktop Bridge Light Switch**. See the README. Do not use an in-place patch script.
+
 ## 1. Install deps (PowerShell)
 
 ```powershell

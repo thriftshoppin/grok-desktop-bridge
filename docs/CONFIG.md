@@ -9,6 +9,11 @@
 | `log.fail_closed` | After 3 failed log writes in a row every tool returns `LOG_UNAVAILABLE` | `true` |
 | `log.max_entry_chars` | Longest log entry | 700 |
 | `kill_switch.hotkeys` | Direct-stop combos (registered by the guardian and polled) | `ctrl+alt+pause`, `ctrl+alt+shift+k` |
+| `kill_switch.esc_second_press_s` | Second Esc within this many seconds stops the bridge | 10 |
+| `kill_switch.esc_arm_grace_s` | Ignore Esc this long after Grok enters control | 0.35 |
+| `kill_switch.esc_modifier_release_grace_s` | Ignore Esc this long after Alt/Ctrl/Win is released | 0.30 |
+| `feed.always_on_top` | Pin the feed above other windows (still no activation) | false |
+| `feed.keep_visible` | Restore the feed if it is minimized or off-screen, without taking focus | true |
 | `denylist` | Process-name globs (KeePass, Bitwarden, ...): input, UI trees and window screenshots refused, full screenshots black them out | password managers |
 | `protected_paths` | `fs` refuses writes/moves/deletes there and `run` refuses non-read-only commands touching them (log, log tools, config, skills, SECURITY.md, approval store) | see file |
 | `audio.device`, `audio.probe_ms` | `desktop_audio_level` probe | any device, 150 ms |
