@@ -1,7 +1,7 @@
 # Visible test windows for selftest.py.
 #  button   : one button; window title counts clicks
 #  password : a password box + a plain box
-#  edge     : borderless 300x120 form at the monitor corner, one big button (click-through test of the orange border)
+#  edge     : borderless 300x120 form at the monitor corner, one big button (click-through test of the white pulsing border)
 #  minimized: a form that starts MINIMIZED (launch must restore it)
 #  inject   : a label whose text looks like an instruction-injection (strong) ; inject-weak : only weak wording
 # -AutoCloseSec closes the form by itself (the elevated worker started it, a Medium test process could not kill it)

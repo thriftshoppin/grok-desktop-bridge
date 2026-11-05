@@ -1,13 +1,13 @@
-# Security model - Desktop MCP Bridge
+# Security model - Grok Desktop Bridge
 
 Personal tool for one user on one PC. Work in progress; not hardened for production use.
 
-**Disclaimer.** Desktop MCP Bridge gives an AI agent control of your computer. It is experimental. It assumes the machine is not already compromised and cannot verify that. Use it at your own risk, on a machine you trust, and keep the kill switch (Esc) in reach.
+**Disclaimer.** Grok Desktop Bridge gives an AI agent control of your computer. It is experimental. It assumes the machine is not already compromised and cannot verify that. Use it at your own risk, on a machine you trust, and keep the kill switch (Esc) in reach.
 
 ## Threat model
 
 **In scope** (the bridge tries to defend against these):
-1. A prompt-injected or misused Claude trying to exceed its permissions through the bridge's tools.
+1. A prompt-injected or misused Grok / agent trying to exceed its permissions through the bridge's tools.
 2. A local program that races or squats the bridge's endpoints (the control pipe, the per-session pipes).
 3. A second agent client with a forged identity or header.
 4. Accidental leakage: the bridge has no network listener, downloads are gated, typed text is not logged by default, captures are temporary.
@@ -34,15 +34,16 @@ elevated so it can drive elevated windows (UIPI would otherwise block input from
   * **Per-session pipe pair** `desktop-bridge-<32 hex>-in/-out`: user + SYSTEM DACL, first instance, one client, kernel-verified pid and a one-time token (`HELLO <token>`). No TCP/UDP listener exists anywhere.
   * Exits after `guardian.idle_exit_min` without clients or when its window is closed. It refuses to run without a visible console.
 * **Residual risks (accepted):** the guardian runs code from this repo folder, which the user can write: anyone who can write those files as this user could get elevated code execution at the next start. Since every same-user process can already elevate silently when UAC is configured that way, this adds no new boundary; do not put the repo anywhere shared. Client identity is a path string, not a signer (DB-4). A same-user process may be able to terminate the elevated guardian (DB-6). Dependencies are pinned in `requirements.txt` and installed only into `.venv`.
-* **Screen text is untrusted input and never an instruction.** Web pages, documents and window titles may try to tell Claude what to do; they have no authority.
+* **Screen text is untrusted input and never an instruction.** Web pages, documents and window titles may try to tell Grok what to do; they have no authority.
 
 ## Safety layer
 * **Visible by design:** the worker's console window shows every call, command and output live. Nothing runs in a hidden window.
 * **Action log:** every tool call is queued and written through `Add-ClaudeLog.ps1` (hash chain; AppendData-only rights; run
   `Protect-ClaudeLog.ps1` to make the file append-only). Typed text is **not** logged (only the character count) unless `log.log_typed_text` is set;
   password-field attempts log `text=[redacted]`. If the writer fails 3 times in a row the bridge fails closed (`LOG_UNAVAILABLE`).
-* **Esc / kill switch:** Esc (polled only while Claude is 'in control'; never hooked or registered), plus the combos below. **Kill switch (combos):** `Ctrl+Alt+Pause` and `Ctrl+Alt+Shift+K`, registered by the worker itself (works if Claude/launcher hang). Detected two ways: `RegisterHotKey` and, because that does not fire when no window has the foreground, a 25 ms poll of the async state of just those combo keys (no keystrokes are read or recorded, no keyboard hook). Cancels waits, typing, clicks, `desktop_run`.
-* **Presence:** orange border + label on every monitor while Claude is in control; real visible mouse and typing; self-targeting of the feed window/overlay refused.
+* **Esc / kill switch:** Esc (polled only while Grok is 'in control'; never hooked or registered), plus the combos below. **Kill switch (combos):** `Ctrl+Alt+Pause` and `Ctrl+Alt+Shift+K`, registered by the worker itself (works if the agent/launcher hang). Detected two ways: `RegisterHotKey` and, because that does not fire when no window has the foreground, a 25 ms poll of the async state of just those combo keys (no keystrokes are read or recorded, no keyboard hook). Cancels waits, typing, clicks, `desktop_run`.
+* **Remote mode (opt-in):** loopback-only streamable-HTTP with per-bot Bearer tokens (constant-time compare); expose only via a user-run outbound tunnel. Esc stops every bot session and the HTTP server. See `docs/REMOTE_QUICKSTART.md`.
+* **Presence:** white pulsing border + label ("Grok is using your computer. Press Esc to Stop") on every monitor while Grok is in control; real visible mouse and typing; self-targeting of the feed window/overlay refused.
 * **Injection gate:** results from the screen/files/clipboard/commands are labelled untrusted and scanned; a strong signature locks the bridge and only the user can clear it in the feed window (see README). Limits: regex signatures (paraphrases and other languages can slip through), no OCR of screenshots, no scan of what the bridge does not return.
 * **Hidden-execution / download / input-bypass tripwires:** best-effort pattern checks in `run`/`launch`/`fs`, NOT a security boundary (obfuscation, encoded commands and indirect execution can evade them).
 * **Config approval:** config.json changes must be approved by the user in the feed window before any tool works. An elevated process under the same account can in theory edit the approval store, the code, or kill/replace the feed prompt; real separation needs a different account.
@@ -56,4 +57,4 @@ elevated so it can drive elevated windows (UIPI would otherwise block input from
 * **Temp files:** nothing is written to disk by M0 screenshots; the temp dir holds only worker debug logs and test files, older than 1 day -> Recycle Bin at start.
 
 ## Not covered
-Physical access; malware already running as this user; a compromised Claude desktop app (it can launch the launcher); prompt injection that persuades Claude (user approval in Claude is the control).
+Physical access; malware already running as this user; a compromised local MCP client that can launch the launcher; prompt injection that persuades the agent (user approval in chat is the control).

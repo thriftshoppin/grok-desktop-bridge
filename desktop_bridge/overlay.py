@@ -1,5 +1,6 @@
-"""On-screen presence: an orange border + label ("Claude is using your computer - Esc to stop") on every monitor, and a click halo.
+"""On-screen presence: a white border that pulses grey↔white + label on every monitor, and a click halo.
 
+Label (active): "Grok is using your computer. Press Esc to Stop".
 Topmost, layered, click-through (WS_EX_TRANSPARENT + WM_NCHITTEST=HTTRANSPARENT), no-activate, tool-window popups, one set per
 monitor. Border = 4 thin solid windows (cheap even at 4K), label = rounded pill window, halo = small per-pixel-alpha window.
 Thickness is DPI scaled (6 px at 100 %, 12 px at 200 %). All windows are excluded from screen capture
@@ -74,17 +75,22 @@ HWND_TOPMOST = wt.HWND(-1)
 WM_PAINT, WM_ERASEBKGND, WM_NCHITTEST, WM_MOUSEACTIVATE, WM_APP = 0x0F, 0x14, 0x84, 0x21, 0x8000
 WDA_EXCLUDEFROMCAPTURE = 0x11
 
-ORANGE = 0x00008CFF  # COLORREF 0x00BBGGRR for #FF8C00
-RED = 0x001E1EDC     # #DC1E1E
-DARK = 0x00181818
-YELLOW = 0x0000C8FF  # #FFC800: stage 1 of Esc (cancelled), a second Esc stops the bridge
+# COLORREF is 0x00BBGGRR. Active border pulses smoothly between GREY and WHITE.
+WHITE = 0x00FFFFFF  # #FFFFFF
+GREY = 0x00808080   # #808080
+RED = 0x001E1EDC    # #DC1E1E (stopped / safety)
+DARK = 0x00101010   # near-black pill text on light border
+YELLOW = 0x00C0C0C0 # #C0C0C0: stage 1 of Esc (cancelled); second Esc stops the bridge
 
 LABELS = {
-    "active": "Claude is using your computer · Esc to stop",
+    "active": "Grok is using your computer. Press Esc to Stop",
     "stopped": "Stopped by you",
     "safety": "Stopped for safety · see the feed window",
     "cancelled": "Cancelled · press Esc again to stop the bridge",
 }
+
+PULSE_PERIOD_S = 1.6  # full grey→white→grey cycle
+
 
 
 def _scale(dpi: int) -> float:
@@ -125,7 +131,8 @@ class Overlay:
         self._halo: dict | None = None
         self._halo_anim: tuple[float, int, int] | None = None  # (start, x, y)
         self._mons: list = []
-        self._brush = {"orange": None, "red": None, "yellow": None}
+        self._brush = {"white": None, "grey": None, "red": None, "yellow": None, "pulse": None}
+        self._pulse_brush_color = None  # last COLORREF used for the pulsing active border
         self._font_cache: dict[int, int] = {}
         self._cls = "DesktopBridgeOverlay"
         self._wndproc = WNDPROC(self._proc)
@@ -192,9 +199,12 @@ class Overlay:
             if self.force_fail:
                 raise RuntimeError("overlay creation forced to fail (--force-overlay-fail)")
             self._register()
-            self._brush["orange"] = g32.CreateSolidBrush(ORANGE)
+            self._brush["white"] = g32.CreateSolidBrush(WHITE)
+            self._brush["grey"] = g32.CreateSolidBrush(GREY)
             self._brush["red"] = g32.CreateSolidBrush(RED)
             self._brush["yellow"] = g32.CreateSolidBrush(YELLOW)
+            self._brush["pulse"] = g32.CreateSolidBrush(WHITE)
+            self._pulse_brush_color = WHITE
             self._build()
             self.ok = True
         except Exception as e:  # noqa
@@ -207,7 +217,8 @@ class Overlay:
         last_top = time.monotonic()
         while True:
             animating = self._halo_anim is not None
-            u32.MsgWaitForMultipleObjects(0, None, False, 15 if animating else 120, 0x04FF)
+            pulsing = self._visible and self._state == "active"
+            u32.MsgWaitForMultipleObjects(0, None, False, 15 if (animating or pulsing) else 120, 0x04FF)
             quit_ = False
             while u32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
                 if msg.message == 0x0012:
@@ -230,6 +241,8 @@ class Overlay:
                 break
             if animating:
                 self._tick_halo()
+            if self._visible and self._state == "active":
+                self._tick_pulse()
             if self._visible and time.monotonic() - last_top > 0.4:  # stay above other topmost windows (Task Manager etc.)
                 last_top = time.monotonic()
                 for w in self._wins:
@@ -273,7 +286,7 @@ class Overlay:
             x, y, w, h = m.x, m.y, m.w, m.h
             for kind, rect in (("top", (x, y, w, t)), ("bottom", (x, y + h - t, w, t)), ("left", (x, y + t, t, h - 2 * t)), ("right", (x + w - t, y + t, t, h - 2 * t))):
                 self._wins.append(self._make(*rect, kind, m))
-            pw, ph = round(470 * s), round(34 * s)
+            pw, ph = round(560 * s), round(34 * s)
             self._wins.append(self._make(x + (w - pw) // 2, y + t + round(6 * s), pw, ph, "pill", m))
         if self._halo is None:
             self._halo = self._make(0, 0, 8, 8, "halo", self._mons[0])
@@ -303,6 +316,32 @@ class Overlay:
             self._halo_anim = (time.monotonic(), int(c[1]), int(c[2]))
             self._tick_halo()
 
+    # ------------------------------------------------------------------ pulse (active border: grey ↔ white)
+    def _pulse_colorref(self) -> int:
+        """Smooth cosine pulse between GREY and WHITE."""
+        import math
+        t = time.monotonic()
+        # 0..1..0 over PULSE_PERIOD_S
+        phase = (math.cos(2 * math.pi * (t / PULSE_PERIOD_S)) + 1.0) * 0.5
+        # channel: GREY=0x80, WHITE=0xFF
+        c = int(round(0x80 + (0xFF - 0x80) * phase))
+        return (c << 16) | (c << 8) | c
+
+    def _tick_pulse(self) -> None:
+        color = self._pulse_colorref()
+        if color == self._pulse_brush_color and self._brush.get("pulse"):
+            # still invalidate so layered windows refresh alpha-adjacent peers rarely needed;
+            # only rebuild brush when the colour actually changes (reduces GDI churn).
+            pass
+        else:
+            old = self._brush.get("pulse")
+            self._brush["pulse"] = g32.CreateSolidBrush(color)
+            self._pulse_brush_color = color
+            if old:
+                g32.DeleteObject(old)
+        for w in self._wins:
+            u32.InvalidateRect(w["hwnd"], None, True)
+
     # ------------------------------------------------------------------ halo
     def _halo_bitmap(self, size: int) -> np.ndarray:
         key = ("halo", size)
@@ -316,8 +355,8 @@ class Overlay:
         glow = np.exp(-((d - r0) ** 2) / (2 * (size * 0.07) ** 2)) * 0.35
         a = np.clip(ring + glow, 0, 1)
         bgra = np.zeros((size, size, 4), np.uint8)
-        bgra[..., 0] = (0x00 * a).astype(np.uint8)   # B (premultiplied)
-        bgra[..., 1] = (0x8C * a).astype(np.uint8)   # G
+        bgra[..., 0] = (0xFF * a).astype(np.uint8)   # B (premultiplied white)
+        bgra[..., 1] = (0xFF * a).astype(np.uint8)   # G
         bgra[..., 2] = (0xFF * a).astype(np.uint8)   # R
         bgra[..., 3] = (255 * a).astype(np.uint8)
         self._font_cache[key] = bgra
@@ -368,16 +407,22 @@ class Overlay:
             hdc = u32.BeginPaint(hwnd, ps)
             rc = wt.RECT()
             u32.GetClientRect(hwnd, ctypes.byref(rc))
-            col = {"active": "orange", "cancelled": "yellow"}.get(self._state, "red")
-            u32.FillRect(hdc, ctypes.byref(rc), self._brush[col])
+            if self._state == "active":
+                brush = self._brush["pulse"] or self._brush["white"]
+            elif self._state == "cancelled":
+                brush = self._brush["yellow"]
+            else:
+                brush = self._brush["red"]
+            u32.FillRect(hdc, ctypes.byref(rc), brush)
             if w and w["kind"] == "pill":
                 s = _scale(w["mon"].dpi)
-                key = round(16 * s)
+                key = round(15 * s)
                 if key not in self._font_cache:
                     self._font_cache[key] = g32.CreateFontW(-key, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
                 old = g32.SelectObject(hdc, self._font_cache[key])
                 g32.SetBkMode(hdc, 1)
-                g32.SetTextColor(hdc, 0x00101010 if self._state in ("active", "cancelled") else 0x00FFFFFF)
+                # Black text on the light pulsing / grey cancelled border; white on red stopped/safety.
+                g32.SetTextColor(hdc, DARK if self._state in ("active", "cancelled") else 0x00FFFFFF)
                 u32.DrawTextW(hdc, LABELS.get(self._state, LABELS["active"]), -1, ctypes.byref(rc), 0x1 | 0x4 | 0x20)  # CENTER|VCENTER|SINGLELINE
                 g32.SelectObject(hdc, old)
             u32.EndPaint(hwnd, ps)

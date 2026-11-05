@@ -1,4 +1,4 @@
-"""The guardian: ONE elevated worker per Windows session, shared by every Claude client (Claude desktop / Cowork, Claude Code ...).
+"""The guardian: ONE elevated worker per Windows session, shared by every Grok / MCP client (Grok relay, Claude desktop, Claude Code ...).
 
 It owns capture, input, UIA, audio, the overlay, the feed window, the kill switch (two-stage Esc) and the log queue. Launchers are thin
 relays (like the Firefox bridge's relay copies): a launcher asks the control pipe for a session; the guardian checks the kernel-reported
@@ -47,7 +47,15 @@ class Feed:
     """Visible live action feed: a normal console window the user can watch. Printing happens on its own thread so a
     stalled console can never block a tool call. Everything is also tee'd to a per-pid log file in the temp dir."""
 
-    COL = {"red": "\x1b[91m", "yel": "\x1b[93m", "grn": "\x1b[92m", "dim": "\x1b[90m", "": ""}
+    # High-contrast black/white Grok look (ANSI on a dark console).
+    COL = {
+        "red": "\x1b[97;41m",   # white on red — kill / injection
+        "yel": "\x1b[97;100m",  # white on grey — warnings / Esc stage 1
+        "grn": "\x1b[97m",      # bright white — OK / connected
+        "dim": "\x1b[90m",      # grey — secondary
+        "wht": "\x1b[97m",
+        "": "\x1b[37m",
+    }
 
     def __init__(self, cfg: dict):
         self.q: queue.Queue = queue.Queue()
@@ -58,7 +66,7 @@ class Feed:
         except Exception:
             pass
         try:
-            winapi.kernel32.SetConsoleTitleW("Desktop Bridge - live action feed (close this window to stop the bridge for every client)")
+            winapi.kernel32.SetConsoleTitleW("Grok Desktop Bridge - live action feed (close this window to stop the bridge for every client)")
             hin = winapi.kernel32.GetStdHandle(-10)
             mode = ctypes.c_uint()
             winapi.kernel32.GetConsoleMode(hin, ctypes.byref(mode))
@@ -200,15 +208,15 @@ def build_server(B: tools.Bridge, log: LogWriter, ks: KillSwitch, feed: "Feed", 
                 ks.check()
                 if not B.approved.is_set():
                     raise ToolRefused("CONFIG_APPROVAL_PENDING", "config.json changed (or was never approved). The user must answer 'Approve changed config? (y/N)' "
-                                      "in the Desktop Bridge feed window before any tool works. Tell the user.")
+                                      "in the Grok Desktop Bridge feed window before any tool works. Tell the user.")
                 if log.fail_closed and not log.healthy:
                     raise ToolRefused("LOG_UNAVAILABLE", "The action log writer is failing, so actions are refused (fail-closed). "
                                       f"Last error: {log.last_error}")
                 B.ensure_feed_visible()
             controlled = gate and name not in control_mod.NO_CONTROL
             if gate and name in control_mod.INPUT_TOOLS and not clients_mod.is_primary(B.client) and hub.primary_busy():
-                # the primary client (Claude desktop) goes first: wait for it (up to 8 s), never fight it for the mouse and keyboard
-                feed.put(f"{B.client}: waiting, Claude desktop is acting", "dim")
+                # the primary client (Grok / Claude desktop) goes first: wait for it (up to 8 s), never fight it for the mouse and keyboard
+                feed.put(f"{B.client}: waiting, a primary client is acting", "dim")
                 for _ in range(160):
                     await asyncio.sleep(0.05)
                     if not hub.primary_busy():
@@ -434,7 +442,7 @@ class Hub:
         return len(self.calls)
 
     def primary_busy(self) -> int:
-        """In-flight INPUT calls of the primary client (Claude desktop)."""
+        """In-flight INPUT calls of the primary client (Grok / Claude desktop)."""
         with self.lock:
             return sum(1 for c, n in self.calls.values() if clients_mod.is_primary(c) and n in control_mod.INPUT_TOOLS)
 
@@ -502,7 +510,7 @@ def main() -> None:
     feed = Feed(cfg)
     winapi.set_dpi_aware()
     if not require_visible_console(tools.console_root, winapi.user32.IsWindowVisible):
-        sys.stderr.write("Desktop Bridge guardian: refusing to run without a visible feed window (no headless mode).\n")
+        sys.stderr.write("Grok Desktop Bridge guardian: refusing to run without a visible feed window (no headless mode).\n")
         os._exit(4)
     instance = args.instance
 
@@ -511,7 +519,7 @@ def main() -> None:
     import winerror
     mutex = win32event.CreateMutex(None, False, f"Local\\DesktopBridgeGuardian-{instance}")
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
-        feed.put("another Desktop Bridge guardian is already running for this user: this window closes.", "yel")
+        feed.put("another Grok Desktop Bridge guardian is already running for this user: this window closes.", "yel")
         time.sleep(0.8)
         os._exit(0)
     HOLD["mutex"] = mutex
@@ -563,7 +571,7 @@ def main() -> None:
     base.overlay, base.control, base.say = overlay, ctl, feed.put
     base.place_feed()
     if overlay_ok:
-        feed.put(f"overlay (orange border + halo) ready; excluded from screenshots: {overlay.affinity_ok}", "grn")
+        feed.put(f"overlay (white pulsing border + halo) ready; excluded from screenshots: {overlay.affinity_ok}", "grn")
     else:
         feed.put(f"overlay UNAVAILABLE - input tools will refuse: {overlay.error}", "red")
     prompt_lock = threading.Lock()
@@ -659,7 +667,7 @@ def main() -> None:
     ctl_name = control_pipe_name(instance)
     log.log(f"desktop-bridge guardian started instance={instance} pid={os.getpid()} elevated={winapi.is_elevated()} integrity={winapi.integrity_level()} "
             f"hotkeys={ks.status()['hotkeys']} state_dir={appr.dir} allowed_clients={len(allow.entries())} temp_cleared={n}")
-    feed.put("Desktop Bridge guardian - one shared bridge for every Claude on this PC. Everything any client does appears here (and in the actions log).", "grn")
+    feed.put("Grok Desktop Bridge guardian - one shared bridge for Grok / Local Computer Assistant (and any allowed MCP client) on this PC. Everything any client does appears here (and in the actions log).", "grn")
     feed.put(f"pid {os.getpid()}  instance {instance}  elevated={winapi.is_elevated()}  integrity={winapi.integrity_level()}  Esc: cancel the call, Esc again: stop the bridge  | hotkeys: {' / '.join(ks.combos)}", "dim")
 
     def serve_session(pin, pout, launcher_pid: int, token: str, client: dict) -> None:
@@ -673,6 +681,9 @@ def main() -> None:
             hub.remove_session(sid)
             return
         feed.put(f"client connected: {label} (launcher pid {launcher_pid}); {hub.session_count()} client(s) now", "grn")
+        if client.get("remote"):
+            feed.put(f"Remote session connected: bot={client.get('bot', '?')}", "yel")
+            log.log(f"remote session connected bot={client.get('bot')} label={label}")
         log.log(f"client connected: {label} launcher_pid={launcher_pid} clients_now={hub.session_count()}")
         B = tools.Bridge(cfg, log, ks, cap=cap, client=label, approved=approved_evt)
         B.overlay, B.control, B.say = overlay, ctl, feed.put
@@ -712,6 +723,15 @@ def main() -> None:
                 reply = {"ok": False, "reason": "bad request (the claimed pid must equal the pipe client's pid)"}
             else:
                 client = clients_mod.find_client(pid)
+                if req.get("remote"):
+                    bot = str(req.get("bot") or "default").strip() or "default"
+                    # Display / audit label; identity_key still comes from the process (consent layer).
+                    client = {
+                        **client,
+                        "label": f"Grok (remote:{bot})",
+                        "bot": bot,
+                        "remote": True,
+                    }
                 with key_locks.setdefault(client["key"], threading.Lock()):  # two launchers of the same app => ONE question
                     if not allow.is_allowed(client["key"]):
                         yes = ask_user(f"Allow client '{client['label']}' to use the bridge? (y/N)   program: {client['exe']}  {client['script']}   launcher pid {pid}",

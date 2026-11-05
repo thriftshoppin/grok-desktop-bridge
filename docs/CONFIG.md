@@ -19,7 +19,7 @@
 | `control.idle_grace_s` | How long the "in control" border stays after the last call | 8 |
 | `control.border_lead_ms` | Border appears at least this long before the first action | 150 |
 | `control.glide_ms_min/max`, `type_ms_per_char`, `value_method_min_chars`, `yield_wait_s` | Mouse glide time, typing speed, `value` typing threshold, how long input yields to the user | 120/300, 8, 200, 6 |
-| `overlay.color`, `.thickness_px` | Border colour and thickness (DPI scaled) | `#FF8C00`, 6 |
+| `overlay.color`, `.thickness_px` | Border colour and thickness (DPI scaled) | `#FFFFFF`, 6 |
 | `blocked_combos` | Key combinations the bridge never sends | `win+l` |
 | `guardian.idle_exit_min` | Guardian exits after this many minutes without a client (0 = never) | 120 |
 

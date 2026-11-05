@@ -1,4 +1,4 @@
-"""'In control' window: from the start of any tool call until idle_grace_s after the last one. While in control the orange border is
+"""'In control' window: from the start of any tool call until idle_grace_s after the last one. While in control the white pulsing border is
 shown on every monitor and Esc stops everything; outside it, the border is hidden and the user's Esc is left alone."""
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class Control:
         try:
             if not self.overlay.ok:
                 if input_tool:
-                    raise ToolRefused("OVERLAY_UNAVAILABLE", "Refused: the on-screen 'Claude is using your computer' border could not be created "
+                    raise ToolRefused("OVERLAY_UNAVAILABLE", "Refused: the on-screen 'Grok is using your computer' border could not be created "
                                       f"({self.overlay.error or 'unknown error'}), so input tools are disabled (fail closed). Read-only tools still work.")
                 return
             if not self.overlay.visible:
@@ -73,7 +73,7 @@ class Control:
             self.overlay.show()
 
     def on_cancel(self, source: str) -> None:
-        """Stage 1 of Esc: yellow border, 'press Esc again to stop the bridge'. Reverts to orange after the second-press window."""
+        """Stage 1 of Esc: yellow border, 'press Esc again to stop the bridge'. Reverts to the white pulsing border after the second-press window."""
         with self._lock:
             self._last = time.monotonic()
         if self.overlay.ok:

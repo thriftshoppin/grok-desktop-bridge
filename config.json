@@ -55,10 +55,15 @@
     "yield_wait_s": 6
   },
   "overlay": {
-    "color": "#FF8C00",
+    "color": "#FFFFFF",
     "thickness_px": 6
   },
   "blocked_combos": [
     "win+l"
-  ]
+  ],
+  "remote": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8765
+  }
 }

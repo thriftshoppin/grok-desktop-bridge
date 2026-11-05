@@ -1,12 +1,12 @@
-"""Desktop MCP Bridge launcher: the process an MCP client (Claude desktop, Claude Code ...) starts (stdio MCP). Python stdlib only.
+"""Grok Desktop Bridge launcher: stdio MCP relay, or opt-in --remote HTTP front.
 
-A thin relay, like the relay copies of a shared bridge: it does no MCP work itself. It
-  1. finds the ONE shared elevated guardian through its control pipe (and starts it, once, if it is not running: silent 'runas', visible window),
-  2. asks the guardian for a session (the guardian checks the kernel-reported PID of this process and, for a client it has never seen, asks the user
-     ONCE in the feed window to allow it),
-  3. connects to the per-session pipe pair it is handed and proves the one-time token,
-  4. relays raw MCP bytes: stdin -> pipe, pipe -> stdout.
-When the client closes our stdin the session ends; the guardian keeps running for the other clients.
+Default (stdio): the process an MCP client (Grok relay, Claude desktop, Claude Code ...) starts.
+A thin relay: finds the shared elevated guardian, asks for a session, relays stdin/stdout over named pipes.
+
+Opt-in remote mode (`--remote`): serves the SAME tool set over MCP streamable-HTTP bound to
+127.0.0.1 only, with per-bot Bearer tokens (`--add-bot` / `--list-bots` / `--revoke-bot`). Expose
+via an outbound tunnel the user runs (e.g. cloudflared). Esc / kill switch stops the HTTP server
+and every bot session. Python stdlib only for the launcher itself.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -27,7 +27,7 @@ k32.CreateMutexW.restype = wt.HANDLE
 
 
 def err(msg: str) -> None:
-    sys.stderr.write(f"[desktop-bridge launcher] {msg}\n")
+    sys.stderr.write(f"[grok-desktop-bridge launcher] {msg}\n")
     sys.stderr.flush()
 
 
@@ -233,10 +233,14 @@ def open_control(timeout: float = 60.0):
         k32.CloseHandle(lock)
 
 
-def request_session():
+def request_session(remote: bool = False, bot: str = ""):
     ctl = open_control()
     try:
-        ctl.write((json.dumps({"op": "connect", "pid": SELF_PID}) + "\n").encode())
+        req = {"op": "connect", "pid": SELF_PID}
+        if remote:
+            req["remote"] = True
+            req["bot"] = bot or "default"
+        ctl.write((json.dumps(req) + "\n").encode())
         buf = b""
         while not buf.endswith(b"\n"):  # blocks while the user answers a first-time 'Allow this client?' prompt in the feed window
             ch = ctl.read(1)
@@ -266,24 +270,30 @@ def write_all(f, data: bytes) -> None:
         mv = mv[n:]
 
 
-def main() -> int:
+def open_session_pipes(remote: bool = False, bot: str = ""):
+    """Ask the guardian for a session and complete the HELLO handshake. Returns (pin, pout)."""
+    resp = request_session(remote=remote, bot=bot)
+    if not resp.get("ok"):
+        raise RuntimeError(resp.get("reason") or "the guardian refused the connection")
+    pipe, token = resp["pipe"], resp["token"]
+    deadline = time.monotonic() + 40
+    pin = open_pipe(r"\\.\pipe" + "\\" + pipe + "-in", "wb", deadline)
+    pout = open_pipe(r"\\.\pipe" + "\\" + pipe + "-out", "rb", deadline)
+    write_all(pin, f"HELLO {token}\n".encode("ascii"))
+    reply = b""
+    while not reply.endswith(b"\n") and len(reply) < 16:
+        ch = pout.read(1)
+        if not ch:
+            raise RuntimeError("guardian closed the pipe during the handshake")
+        reply += ch
+    if reply.strip() != b"OK":
+        raise RuntimeError("handshake rejected by the guardian")
+    return pin, pout
+
+
+def run_stdio() -> int:
     try:
-        resp = request_session()
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("reason") or "the guardian refused the connection")
-        pipe, token = resp["pipe"], resp["token"]
-        deadline = time.monotonic() + 40
-        pin = open_pipe(r"\\.\pipe" + "\\" + pipe + "-in", "wb", deadline)
-        pout = open_pipe(r"\\.\pipe" + "\\" + pipe + "-out", "rb", deadline)
-        write_all(pin, f"HELLO {token}\n".encode("ascii"))
-        reply = b""
-        while not reply.endswith(b"\n") and len(reply) < 16:
-            ch = pout.read(1)
-            if not ch:
-                raise RuntimeError("guardian closed the pipe during the handshake")
-            reply += ch
-        if reply.strip() != b"OK":
-            raise RuntimeError("handshake rejected by the guardian")
+        pin, pout = open_session_pipes()
     except Exception as e:
         err(str(e))
         return 1
@@ -315,6 +325,167 @@ def main() -> int:
     except Exception:
         pass
     return 0
+
+
+def _bot_store():
+    from desktop_bridge.remote_auth import BotTokenStore
+    return BotTokenStore()
+
+
+def cmd_add_bot(name: str) -> int:
+    store = _bot_store()
+    token, created = store.add_bot(name)
+    action = "created" if created else "rotated"
+    print(f"bot '{name}' {action}")
+    print(f"token: {token}")
+    print(f"store: {store.path}")
+    print("Hand this token to ONE bot only. Revoke with: python launcher.py --revoke-bot " + name)
+    return 0
+
+
+def cmd_list_bots() -> int:
+    store = _bot_store()
+    bots = store.list_bots()
+    if not bots:
+        print("no bots yet; create one with: python launcher.py --add-bot <name>")
+        print(f"store: {store.path}")
+        return 0
+    print(f"store: {store.path}")
+    for b in bots:
+        print(f"  {b['name']:20s}  created={b['created']}  token={b['token_prefix']}")
+    return 0
+
+
+def cmd_revoke_bot(name: str) -> int:
+    store = _bot_store()
+    if store.revoke_bot(name):
+        print(f"revoked bot '{name}'")
+        return 0
+    print(f"bot '{name}' not found", file=sys.stderr)
+    return 1
+
+
+def run_remote(host: str, port: int) -> int:
+    """Serve MCP over streamable-HTTP on loopback; one guardian session per bot token."""
+    from desktop_bridge.remote_auth import BotTokenStore
+    from desktop_bridge.remote_http import SessionTransport, serve_remote, run_until_stopped
+
+    store = BotTokenStore()
+    if not store.list_bots():
+        name, token, _ = store.ensure_default("default")
+        print(f"[grok-desktop-bridge] no bots configured; created bot '{name}'")
+        print(f"[grok-desktop-bridge] token: {token}")
+        print(f"[grok-desktop-bridge] store: {store.path}")
+    else:
+        print(f"[grok-desktop-bridge] bot tokens loaded from {store.path}")
+        for b in store.list_bots():
+            print(f"[grok-desktop-bridge]   bot={b['name']}  token={b['token_prefix']}")
+
+    stop = threading.Event()
+    sessions = {}  # bot -> (pin, pout) keep FDs alive
+
+    def on_log(msg: str) -> None:
+        # Visible console (this launcher window) + helpful for tunnel debugging.
+        sys.stderr.write(f"[remote] {msg}\n")
+        sys.stderr.flush()
+
+    def session_factory(bot: str) -> SessionTransport:
+        pin, pout = open_session_pipes(remote=True, bot=bot)
+        sessions[bot] = (pin, pout)
+        buf = {"leftover": b""}
+
+        def write_bytes(data: bytes) -> None:
+            write_all(pin, data)
+
+        def read_line() -> bytes:
+            while b"\n" not in buf["leftover"]:
+                chunk = pout.read(4096)
+                if not chunk:
+                    return b""
+                buf["leftover"] += chunk
+            line, _, rest = buf["leftover"].partition(b"\n")
+            buf["leftover"] = rest
+            return line + b"\n"
+
+        return SessionTransport(write_bytes, read_line, on_event=on_log, bot=bot)
+
+    print(f"[grok-desktop-bridge] remote mode: http://{host}:{port}/mcp  (loopback only)")
+    print("[grok-desktop-bridge] expose with an OUTBOUND tunnel, e.g.:")
+    print(f"    cloudflared tunnel --url http://127.0.0.1:{port}")
+    print("[grok-desktop-bridge] hand the public HTTPS URL + a bot Bearer token to the cloud bot.")
+    print("[grok-desktop-bridge] Esc in the guardian feed stops ALL bots and this HTTP server.")
+
+    httpd = serve_remote(host, port, store, session_factory, on_log=on_log, stop_event=stop)
+
+    def _watch_pipes():
+        # Esc stage-2 / feed-window close kills the guardian → pipes drop → stop HTTP for every bot.
+        while not stop.wait(0.5):
+            dead = False
+            for bot, (pin, pout) in list(sessions.items()):
+                try:
+                    if pin.closed or pout.closed:
+                        dead = True
+                        break
+                except Exception:
+                    dead = True
+                    break
+            # Also: any SessionTransport the HTTP server holds that has closed.
+            try:
+                for tr in list(httpd._sessions.values()):
+                    if tr.closed:
+                        dead = True
+                        break
+            except Exception:
+                pass
+            if dead:
+                on_log("guardian session closed (Esc / feed close) — stopping remote HTTP for all bots")
+                stop.set()
+                return
+
+    threading.Thread(target=_watch_pipes, name="remote-pipe-watch", daemon=True).start()
+    try:
+        run_until_stopped(httpd)
+    except KeyboardInterrupt:
+        stop.set()
+        on_log("KeyboardInterrupt — stopping remote HTTP")
+    finally:
+        stop.set()
+        for pin, pout in list(sessions.values()):
+            for f in (pin, pout):
+                try:
+                    f.close()
+                except Exception:
+                    pass
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Grok Desktop Bridge launcher (stdio MCP or --remote HTTP)")
+    ap.add_argument("--remote", action="store_true", help="serve MCP over streamable-HTTP on 127.0.0.1 (Bearer token required)")
+    ap.add_argument("--host", default="127.0.0.1", help="remote bind host (loopback only)")
+    ap.add_argument("--port", type=int, default=8765, help="remote bind port (default 8765)")
+    ap.add_argument("--add-bot", metavar="NAME", help="create/rotate a named bot token and print it")
+    ap.add_argument("--list-bots", action="store_true", help="list named bot tokens (prefixes only)")
+    ap.add_argument("--revoke-bot", metavar="NAME", help="delete a named bot token")
+    args = ap.parse_args(argv)
+
+    if args.add_bot:
+        return cmd_add_bot(args.add_bot)
+    if args.list_bots:
+        return cmd_list_bots()
+    if args.revoke_bot:
+        return cmd_revoke_bot(args.revoke_bot)
+    if args.remote:
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            err("remote mode must bind to loopback only (127.0.0.1)")
+            return 2
+        try:
+            return run_remote(args.host, args.port)
+        except Exception as e:
+            err(str(e))
+            return 1
+    return run_stdio()
 
 
 if __name__ == "__main__":

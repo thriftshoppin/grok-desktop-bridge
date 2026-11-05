@@ -12,12 +12,12 @@ import subprocess
 import threading
 import time
 
-from . import capture, coords, policy, safety, uia, winapi
+from . import capture, clients, coords, policy, safety, uia, winapi
 from .coords import Monitor
 from .safety import ToolRefused
 
 PROTECTED_CLASSES = {"Progman", "WorkerW"}
-FEED_TITLE = "Desktop Bridge - live action feed"
+FEED_TITLE = "Grok Desktop Bridge - live action feed"
 IGNORED_WINDOW_CLASSES = {"IME", "MSCTFIME UI", "GDI+ Hook Window Class", "CicMarshalWndClass", "tooltips_class32"}
 
 
@@ -47,7 +47,7 @@ class Bridge:
         self.ks = ks
         self.started = time.time()
         self.cap = cap or capture.Capturer()   # shared between sessions in the guardian (one DXGI camera set)
-        self.client = client                   # who is on the other end of this MCP session (Claude desktop, Claude Code ...)
+        self.client = client                   # who is on the other end of this MCP session (Grok / Local Computer Assistant, Claude desktop, ...)
         self.instance = "main"
         self.clients_fn = lambda: []           # set by the guardian: labels of all connected clients
         self.refs = uia.RefTable()
@@ -178,7 +178,7 @@ class Bridge:
             out = []
             helper = getattr(getattr(self.log, "_ps", None), "pid", None)
             for c in psutil.Process().children(recursive=True):
-                if c.name().lower() == "conhost.exe":  # console host of an app Claude launched (it draws that app's visible console)
+                if c.name().lower() == "conhost.exe":  # console host of an app the agent launched (it draws that app's visible console)
                     continue
                 wins = [w for w in byp.get(c.pid, []) if w["class"] not in IGNORED_WINDOW_CLASSES and not w["class"].startswith(".NET-BroadcastEventWindow")]
                 out.append({"pid": c.pid, "name": c.name(), "role": "bridge-helper" if c.pid == helper else "launched-app", "on_feed_console": c.pid in on_console,
@@ -202,7 +202,7 @@ class Bridge:
             "monitors": len(mons),
             "in_control": bool(self.control and self.control.in_control()),
             "client": self.client,
-            "client_role": "primary" if self.client == "Claude desktop" else "secondary",
+            "client_role": "primary" if clients.is_primary(self.client) else "secondary",
             "clients": self.clients_fn(),
             "instance": self.instance,
             "idle_grace_s": self.control.grace if self.control else None,
@@ -403,7 +403,7 @@ class Bridge:
 
     def _check_not_self(self, hwnd: int) -> None:
         if self._is_self(hwnd):
-            raise ToolRefused("SELF_TARGET_REFUSED", "Refused: that target is the bridge's own feed window or overlay. Claude may not click, type or "
+            raise ToolRefused("SELF_TARGET_REFUSED", "Refused: that target is the bridge's own feed window or overlay. Grok may not click, type or "
                               "send keys there (it could answer the bridge's approval prompts).")
 
     def _element_point(self, ref: str) -> tuple[int, int, object]:

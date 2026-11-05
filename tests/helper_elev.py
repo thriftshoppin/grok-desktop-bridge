@@ -11,7 +11,7 @@ import time
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32")
-FEED = "Desktop Bridge - live action feed"
+FEED = "Grok Desktop Bridge - live action feed"
 
 
 class KI(ctypes.Structure):

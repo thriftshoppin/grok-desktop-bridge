@@ -1,6 +1,6 @@
 """Client identity and the one-time 'Allow this client?' allow-list for the shared guardian.
 
-A client is the program that started a launcher (Claude desktop, Claude Code in VS Code, a test script...). The guardian derives its
+A client is the program that started a launcher (Grok / Local Computer Assistant relay, Claude desktop, Claude Code, a test script...). The guardian derives its
 identity from the kernel-reported launcher PID: the first ancestor that is not a launcher/venv shim. The allow-list lives in the
 guardian's protected state folder; an unknown identity makes the guardian ask the user in the feed window (typed y/N).
 Honest limit: a same-user process can spoof its parent; with silent UAC elevation such a process could elevate anyway, so this is a
@@ -17,13 +17,16 @@ import threading
 SCRIPT_HOSTS = {"python.exe", "pythonw.exe", "node.exe", "powershell.exe", "pwsh.exe", "cmd.exe"}
 
 
-# Claude desktop (Cowork) is the PRIMARY client: what most people use this bridge with. When two clients want the pointer or keyboard at the same
-# moment, the primary goes first and the others wait briefly (they are never refused for that).
-PRIMARY_LABELS = {"Claude desktop"}
+# Primary clients get the mouse/keyboard first when two clients contend (others wait briefly; they are never refused for that).
+# Grok / Local Computer Assistant is the intended primary for this fork; Claude desktop stays primary for backward compatibility.
+PRIMARY_LABELS = {"Grok", "Local Computer Assistant", "Claude desktop", "Grok (remote)"}
 
 
 def is_primary(label: str) -> bool:
-    return label in PRIMARY_LABELS
+    if label in PRIMARY_LABELS:
+        return True
+    # Per-bot remote sessions: "Grok (remote:alice)" etc. share primary priority.
+    return bool(label) and label.startswith("Grok (remote")
 
 
 def norm_path(p: str) -> str:
@@ -46,7 +49,15 @@ def label_for(client_exe: str, script: str = "") -> str:
         return "Claude desktop"
     if "anthropic.claude-code" in p and name == "claude.exe":
         return "Claude Code (VS Code)"
+    # Grok / Local Computer Assistant clients (local relay, remote HTTP sidecar, install path).
+    if "grok-desktop-bridge" in p or "grok_desktop_bridge" in p:
+        return "Grok"
     if name in SCRIPT_HOSTS and script:
+        sl = script.replace("\\", "/").lower()
+        if "grok" in sl and ("relay" in sl or "bridge" in sl or "sidecar" in sl or "launcher.py" in sl):
+            return "Grok"
+        if "local_computer_assistant" in sl or "local-computer-assistant" in sl:
+            return "Local Computer Assistant"
         return f"{name} {os.path.basename(script)}"
     return os.path.basename(client_exe or "") or "unknown client"
 

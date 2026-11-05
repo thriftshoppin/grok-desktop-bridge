@@ -35,7 +35,7 @@ LOG = r"C:\Users\SysAdmin\Claude\claude-actions-log.md"
 LOGDIR = r"C:\Users\SysAdmin\Claude\log-tools"
 TMP = os.path.expandvars(r"%TEMP%\desktop-bridge")
 HELPER = os.path.join(ROOT, "tests", "helper_elev.py")
-FEED = "Desktop Bridge - live action feed"
+FEED = "Grok Desktop Bridge - live action feed"
 RESULTS: list[tuple[str, bool, str]] = []
 CALLS: dict[str, int] = {}
 UID = uuid.uuid4().hex[:8]
@@ -493,9 +493,10 @@ async def t_border(c: Client):
     img = Image.open(io.BytesIO(shot["_image"])).convert("RGB")
     w_, h_ = img.size
     px = [img.getpixel((w_ // 2, y)) for y in range(0, 6)] + [img.getpixel((x, h_ // 2)) for x in range(0, 6)]
-    orange = [p for p in px if abs(p[0] - 255) < 30 and abs(p[1] - 140) < 40 and p[2] < 60]
-    record("T22 border is NOT in the bridge's own screenshots (WDA_EXCLUDEFROMCAPTURE) while it is visible", len(vis) > 0 and not orange and s["overlay"]["excluded_from_capture"],
-           f"visible overlay windows={len(vis)}; orange pixels in edge samples={len(orange)}/12; excluded_from_capture={s['overlay']['excluded_from_capture']} (OBS display capture: not tested)")
+    # White/grey pulsing border must not appear in the bridge's own screenshots.
+    whiteish = [p for p in px if p[0] > 180 and p[1] > 180 and p[2] > 180 and abs(int(p[0]) - int(p[1])) < 40 and abs(int(p[1]) - int(p[2])) < 40]
+    record("T22 border is NOT in the bridge's own screenshots (WDA_EXCLUDEFROMCAPTURE) while it is visible", len(vis) > 0 and not whiteish and s["overlay"]["excluded_from_capture"],
+           f"visible overlay windows={len(vis)}; white/grey pixels in edge samples={len(whiteish)}/12; excluded_from_capture={s['overlay']['excluded_from_capture']} (OBS display capture: not tested)")
     t_last = time.time()
     gone_at = None
     for _ in range(300):

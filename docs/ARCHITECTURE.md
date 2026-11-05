@@ -5,7 +5,7 @@
 ## Processes
 
 ```
-MCP client (Claude desktop = primary, Claude Code, ...)        one per client app / session
+MCP client (Grok / Local Computer Assistant = primary, Claude desktop, Claude Code, ...)        one per client app / session
         | stdio MCP
   launcher.py   (Medium integrity, Python stdlib only; a thin relay)
         | 1. control pipe  \\.\pipe\desktop-bridge-ctl-<instance>-<user>
@@ -15,15 +15,15 @@ MCP client (Claude desktop = primary, Claude Code, ...)        one per client ap
         | 3. per-session pipe pair  desktop-bridge-<32 hex>-in / -out   (first-instance, user+SYSTEM DACL, Medium label)
         |    - launcher sends HELLO <token>; guardian checks kernel-reported client pid == launcher pid
         v
-  THE GUARDIAN   desktop_bridge.worker --guardian   (High integrity, ONE per Windows session and instance name, visible console "live action feed")
+  THE GUARDIAN   desktop_bridge.worker --guardian   (High integrity, ONE per Windows session and instance name, visible console "Grok Desktop Bridge - live action feed")
 ```
 
 * **One guardian, many clients.** The first launcher that finds no guardian starts it (`runas`, or the scheduled task `DesktopBridgeWorker` as fallback); later launchers join. A named mutex keeps it single. It exits after `guardian.idle_exit_min` (default 120) without clients, or when its window is closed. It refuses to run without a visible console (no headless mode).
 * **Control pipe** (`worker.py`: `_create_ctl_pipe`, `control_loop`, `handle_control`): DACL current user + SYSTEM, `PIPE_REJECT_REMOTE_CLIENTS`, 255 instances, first instance created with `FILE_FLAG_FIRST_PIPE_INSTANCE`. If that creation fails (a squatter), the guardian says so in its feed and stops (DB-1). Every connection: kernel-reported client pid, request read with a 5 s timeout, per-process cap 4 and 32 unanswered connections in total (DB-2, `ctlguard.py`).
 * **Client identity** (`clients.py`): from the launcher's pid the guardian walks up to the program that started it (the launcher chain is only a Python interpreter running `launcher.py`). The identity is the normalised program path (version numbers collapsed) plus, for script hosts such as `python.exe`, the script name. A program never seen before is **not served** until the user types `y` at "Allow client ... (y/N)" in the feed window; the answer is remembered in `%ProgramData%\DesktopBridge\state\clients.json`. Known weaknesses: see SECURITY-AUDIT.md (DB-3, DB-4).
-* **Sessions.** Each client gets its own MCP server session (mcp 2.3.0 `MCPServer`, `mcp_patch.py`), its own screenshot/element reference state and a label that appears in every log line (`client=<label>`). Claude desktop is the *primary* client: when two clients want the mouse or keyboard at once, the primary goes first (others wait up to 8 s; they are not refused).
+* **Sessions.** Each client gets its own MCP server session (mcp 2.3.0 `MCPServer`, `mcp_patch.py`), its own screenshot/element reference state and a label that appears in every log line (`client=<label>`). Grok / Local Computer Assistant (and Claude desktop for compatibility) is the *primary* client: when two clients want the mouse or keyboard at once, the primary goes first (others wait up to 8 s; they are not refused).
 * **Execution.** One shared UI thread serialises all input (mouse, keyboard, focus); a pool of 8 threads runs everything else (capture, `run`, `fs`, `wait`, ...). The guardian is elevated so that input reaches elevated windows (UIPI) and `desktop_run` runs elevated.
-* **Shared services in the guardian:** overlay (orange border, `overlay.py`), Esc/kill switch (`safety.py`, `esc.py`), control state (`control.py`), screen capture (`capture.py`: DXGI via dxcam, GDI/mss fallback), UI Automation (`uia.py`), policy gates (`policy.py`), injection scanner, action-log queue (`LogWriter`).
+* **Shared services in the guardian:** overlay (white pulsing border, `overlay.py`), Esc/kill switch (`safety.py`, `esc.py`), control state (`control.py`), screen capture (`capture.py`: DXGI via dxcam, GDI/mss fallback), UI Automation (`uia.py`), policy gates (`policy.py`), injection scanner, action-log queue (`LogWriter`).
 
 ## A tool call, step by step
 
@@ -35,7 +35,7 @@ MCP client (Claude desktop = primary, Claude Code, ...)        one per client ap
 
 ## Esc (two stages)
 
-Esc is polled (`GetAsyncKeyState`, 25 ms) only while Claude is "in control" - there is no keyboard hook. **Stage 1**: cancel every in-flight call of every client (`CANCELLED_BY_USER`, yellow border); the bridge stays usable. **Stage 2** (a second Esc within 10 s, or Esc with nothing running): the bridge stops (red border, every tool returns `KILL_SWITCH` until the user resumes). `Ctrl+Alt+Pause` and `Ctrl+Alt+Shift+K` stop it directly. The bridge's own injected Esc is ignored (see audit DB-7).
+Esc is polled (`GetAsyncKeyState`, 25 ms) only while Grok is "in control" - there is no keyboard hook. **Stage 1**: cancel every in-flight call of every client (`CANCELLED_BY_USER`, yellow border); the bridge stays usable. **Stage 2** (a second Esc within 10 s, or Esc with nothing running): the bridge stops (red border, every tool returns `KILL_SWITCH` until the user resumes). `Ctrl+Alt+Pause` and `Ctrl+Alt+Shift+K` stop it directly. The bridge's own injected Esc is ignored (see audit DB-7).
 
 ## State and files
 

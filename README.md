@@ -1,24 +1,23 @@
-> **Work in progress.** This is an early, personal build (working name "Desktop MCP Bridge") for one Windows PC. M0 (the "takeover core") is written and mostly tested; M1-M3 (processes/services/registry, screen recording, A/V correlation, batch) are not started.
-> Not production-ready and not hardened for public use: it runs an **elevated** worker that can see the screen and control the keyboard and mouse, and its safety checks are best-effort. Read SECURITY.md before running anything. Paths in `config.json` are specific to the author's machine.
+> **Work in progress.** Fork of [desktop-mcp-bridge](https://github.com/thriftshoppin/desktop-mcp-bridge) rebranded as the **Grok Desktop Bridge** for Grok / Local Computer Assistant. Early personal build for one Windows PC. M0 (the "takeover core") is written and mostly tested; M1-M3 are not started. **Remote mode (opt-in streamable-HTTP + outbound tunnel) is implemented** — see [Remote mode](#remote-mode-implemented) and `docs/REMOTE_QUICKSTART.md`.
+> Not production-ready and not hardened for public use: it runs an **elevated** worker that can see the screen and control the keyboard and mouse, and its safety checks are best-effort. Read SECURITY.md before running anything. Paths in `config.json` are specific to the original author's machine — edit them for yours.
 
-# Desktop MCP Bridge (working name)
+# Grok Desktop Bridge
 
-**Disclaimer.** Desktop MCP Bridge gives an AI agent control of your computer. It is experimental. It assumes the machine is not already compromised and cannot verify that. Use it at your own risk, on a machine you trust, and keep the kill switch (Esc) in reach.
+**Disclaimer.** Grok Desktop Bridge gives an AI agent control of your computer. It is experimental. It assumes the machine is not already compromised and cannot verify that. Use it at your own risk, on a machine you trust, and keep the kill switch (Esc) in reach.
 
-One local stdio MCP server that lets Claude use **this Windows PC** the way a person does: see the screen, read the UI tree,
-click, type, press shortcuts, open apps, move files, run commands, and check whether audio is playing. Personal tool, local only,
-no network listener, no push. Built for `C:\Users\SysAdmin` but paths live in `config.json`.
+One local stdio MCP server that lets **Grok / Local Computer Assistant** (and, for compatibility, Claude desktop / Claude Code) use **this Windows PC** the way a person does: see the screen, read the UI tree,
+click, type, press shortcuts, open apps, move files, run commands, and check whether audio is playing. Personal tool. The guardian still has **no inbound network listener** today. Paths live in `config.json`.
 
-**Everything is visible.** The worker runs in a normal console window ("Desktop Bridge - live action feed") that prints every tool
+**Everything is visible.** The worker runs in a normal console window ("Grok Desktop Bridge - live action feed") that prints every tool
 call, every command it runs and its output, and every kill-switch event. Nothing is hidden: no `pythonw`, no `SW_HIDE`, no
 `CREATE_NO_WINDOW`; helper processes share that console. Every call is also written to the actions log.
 
 ## How it is built
 
 ```
-Claude desktop (Cowork) = PRIMARY client          Claude Code (VS Code) = optional second client
-        | stdio MCP                                      | stdio MCP
-   launcher.py (Medium, stdlib only, thin relay)    launcher.py (same file, same relay)
+Grok / Local Computer Assistant = PRIMARY (intended)   Claude desktop / Claude Code = optional / legacy
+        | stdio MCP (today) / remote relay (planned)            | stdio MCP
+   launcher.py (Medium, stdlib only, thin relay)           launcher.py (same file, same relay)
         \_______ control pipe: user-only DACL, kernel-verified client PID ______/
                                       v
             THE GUARDIAN: one elevated worker per Windows session, one visible feed window  -- MCP server (mcp 2.3.0 `MCPServer`)
@@ -29,9 +28,9 @@ Claude desktop (Cowork) = PRIMARY client          Claude Code (VS Code) = option
 
 * **One shared bridge, like a primary/relay setup:** the first launcher that finds no guardian starts it (silent `runas`, one visible window); every
   later launcher, from any client, joins it. No extra feed windows or config prompts per client or session.
-* **Claude desktop is the primary client** (it is what most people use with this): its input goes first when two clients want the mouse or keyboard
+* **Grok / Local Computer Assistant is the intended primary client** (Claude desktop remains primary too for compatibility): its input goes first when two clients want the mouse or keyboard
   at the same moment; other clients wait briefly (they are never refused for that). Every log line and `session_status` names the client.
-* **A client the guardian has never seen is not served until you allow it, once:** the feed window asks `Allow client 'Claude Code (VS Code)' ... (y/N)`;
+* **A client the guardian has never seen is not served until you allow it, once:** the feed window asks `Allow client '...' ... (y/N)`;
   the answer is remembered (state folder `%ProgramData%\DesktopBridge\state`, outside the packaged-app file redirection).
 * The guardian exits by itself after `guardian.idle_exit_min` (default 120) minutes without a client, or when you close its window. If `runas`
   fails, the launcher falls back to the scheduled task `DesktopBridgeWorker` (create it once with `install-elevated-task.ps1`).
@@ -41,7 +40,7 @@ Claude desktop (Cowork) = PRIMARY client          Claude Code (VS Code) = option
 ## Threat model (short)
 
 **In scope** (the bridge tries to defend against these):
-1. A prompt-injected or misused Claude trying to exceed its permissions through the bridge's tools.
+1. A prompt-injected or misused Grok / agent trying to exceed its permissions through the bridge's tools.
 2. A local program that races or squats the bridge's endpoints (the control pipe, the per-session pipes).
 3. A second agent client with a forged identity or header.
 4. Accidental leakage: the bridge has no network listener, downloads are gated, typed text is not logged by default, captures are temporary.
@@ -53,9 +52,10 @@ Details: [SECURITY.md](SECURITY.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-A
 ## Documentation
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/CONFIG.md](docs/CONFIG.md) · [docs/OPERATIONS.md](docs/OPERATIONS.md) · [docs/TESTING.md](docs/TESTING.md) · [docs/TOOLS.md](docs/TOOLS.md) (generated) · [docs/features/](docs/features/) · [CHANGELOG.md](CHANGELOG.md)
 
-## Install / register (you do this; the bridge never edits Claude's config)
+## Install / register (you do this; the bridge never edits your client's config)
 
-**Primary: Claude desktop (Cowork).** Optional second client: Claude Code (below).
+**Intended primary: Grok / Local Computer Assistant** (see [Remote mode](#remote-mode-implemented); multi-bot named tokens supported).
+**Works today unchanged:** Claude desktop (Cowork) or Claude Code as a local stdio MCP client (below).
 
 1. **Recommended first:** run `C:\Users\SysAdmin\Claude\log-tools\Protect-ClaudeLog.ps1` yourself so the actions log becomes
    append-only and audited. The bridge writes through `Add-ClaudeLog.ps1`, which only needs AppendData rights.
@@ -70,7 +70,7 @@ Details: [SECURITY.md](SECURITY.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-A
 ```
 
    (Alternatively use the repo as a Claude plugin: `.claude-plugin/plugin.json` points at the same launcher.)
-3. On first use a console window titled **Desktop Bridge - live action feed** appears. Leave it open; closing it stops the bridge for every client.
+3. On first use a console window titled **Grok Desktop Bridge - live action feed** appears. Leave it open; closing it stops the bridge for every client.
 4. Optional fallback if `runas` is ever refused: from an elevated PowerShell run `install-elevated-task.ps1` once.
 5. **Optional second client: Claude Code.** Register the same launcher in Claude Code's own MCP config (user scope), for example
    `claude mcp add --scope user desktop -- <repo>/.venv/Scripts/python.exe <repo>/launcher.py`. It joins the same guardian (no new window); the first time, the feed
@@ -80,10 +80,10 @@ Rebuild the environment: `python -m venv .venv` (Python 3.14.8 here) then `.venv
 
 ## Kill switch
 
-**Esc is two-stage and applies to every client at once:** the first Esc **cancels every tool call that is running** (they return `CANCELLED_BY_USER`, the border turns yellow, the bridge stays usable); a **second Esc within 10 s** (`kill_switch.esc_second_press_s`), or an Esc while Claude is in control with nothing running, **stops the bridge** for everyone (border red, every call refused until you resume in the feed window).
+**Esc is two-stage and applies to every client at once:** the first Esc **cancels every tool call that is running** (they return `CANCELLED_BY_USER`, the border turns yellow, the bridge stays usable); a **second Esc within 10 s** (`kill_switch.esc_second_press_s`), or an Esc while Grok is in control with nothing running, **stops the bridge** for everyone (border red, every call refused until you resume in the feed window).
 
-**Esc** (while Claude is in control; see below), `Ctrl+Alt+Pause` or `Ctrl+Alt+Shift+K` (combos configurable in `config.json`). The worker registers them itself, so they work even if the
-launcher or Claude hangs. (Hotkey plus a key-state poll, so it also works when no window has the foreground.) On trigger: in-flight waits, typing, clicks and `desktop_run` stop within about a second, every tool
+**Esc** (while Grok is in control; see below), `Ctrl+Alt+Pause` or `Ctrl+Alt+Shift+K` (combos configurable in `config.json`). The worker registers them itself, so they work even if the
+launcher or the agent hangs. (Hotkey plus a key-state poll, so it also works when no window has the foreground.) On trigger: in-flight waits, typing, clicks and `desktop_run` stop within about a second, every tool
 returns `KILL_SWITCH` until someone calls `desktop_resume`, and the feed window shows it in red. `desktop_session_status` reports the state.
 
 ## Tools (prefix `desktop_`)
@@ -137,18 +137,18 @@ paths - Recycle Bin deletes - temp files under `%TEMP%\desktop-bridge\` older th
 
 ## Presence, visibility and the injection gate (M0.1 - M0.3)
 
-**You can always see and stop what Claude does.**
+**You can always see and stop what Grok does.**
 * **"In control" window.** From the start of any tool call (except `session_status`, `monitors_list`, `resume`) until `control.idle_grace_s` (default 8 s) after the last one.
-* **Orange border + label.** While in control, every monitor gets a topmost, click-through, no-activate, ~6 px (DPI scaled: 12 px on the 200 % TV) orange (#FF8C00) border and a pill
-  at the top: "Claude is using your computer · Esc to stop". It appears >= 150 ms before the first action of a burst, disappears after the grace period, turns **red**
+* **White pulsing border + label.** While in control, every monitor gets a topmost, click-through, no-activate, ~6 px (DPI scaled: 12 px on the 200 % TV) white border that pulses grey↔white and a pill
+  at the top: "Grok is using your computer. Press Esc to Stop". It appears >= 150 ms before the first action of a burst, disappears after the grace period, turns **red**
   ("Stopped by you" / "Stopped for safety") when stopped. The overlay is excluded from the bridge's own screenshots (`WDA_EXCLUDEFROMCAPTURE`), which also hides it from
   display-capture tools; your eyes and a phone camera still see it. If it cannot be created, input tools refuse with `OVERLAY_UNAVAILABLE` (fail closed).
-* **Esc stops everything.** While Claude is in control, a press of Esc halts all actions within ~50-100 ms (waits, mouse glides, typing mid-string, `run`), the border turns red and every call is refused until
+* **Esc stops everything.** While Grok is in control, a press of Esc halts all actions within ~50-100 ms (waits, mouse glides, typing mid-string, `run`), the border turns red and every call is refused until
   `desktop_resume`. Esc is *polled* (`GetAsyncKeyState`, every 25 ms, only while in control): no `RegisterHotKey`, no keyboard hook, so the key always reaches the app you are using.
   The bridge's own injected Esc (`desktop_key esc`) is ignored (timestamps; a real Esc within ~120 ms of it is also ignored). `Ctrl+Alt+Pause` and `Ctrl+Alt+Shift+K` still work any time.
 * **The mouse is the real mouse.** Pointer actions glide the real cursor (120-300 ms, eased), draw a halo, then click. `click(ref)` clicks the element's centre with the real mouse; nothing is "invoked" silently.
 * **Typing is visible.** `type` clicks the field (if you pass a ref) and types real keystrokes at ~8 ms/char. `method="value"` (ValuePattern.SetValue) is opt-in, needs a ref, only for >= 200 chars, and is announced in the feed. **This changes M0:** the old default was SetValue.
-* **Self-protection.** `click/type/key/window_focus` aimed at the bridge's own feed window or overlay are refused (`SELF_TARGET_REFUSED`), so Claude cannot answer its prompts.
+* **Self-protection.** `click/type/key/window_focus` aimed at the bridge's own feed window or overlay are refused (`SELF_TARGET_REFUSED`), so Grok cannot answer its prompts.
 * **The feed window is never hidden:** it starts on the primary monitor; if minimized/hidden/off-screen when a call arrives it is restored without taking focus. `session_status.feed_window` reports it.
 * **Nothing hidden:** `run` executes in the visible feed console. Refused with `HIDDEN_EXECUTION_REFUSED`: `-WindowStyle Hidden|Minimized`, `start /min|/b`, `wscript|cscript //B`, `pythonw`, `mshta`, `Start-Job`/`-AsJob`, `CreateNoWindow`, and
   scheduled-task/service creation (only with `user_requested_download=true`, as specified). Also refused: shell input synthesis (`INPUT_BYPASS_REFUSED`) and shell commands that write protected policy files (`PROTECTED_PATH`).
@@ -164,7 +164,7 @@ No setting, flag or parameter relaxes this. Text *inside images* cannot be scann
 **Config approval.** `config.json` (+ `config.local.json`) are hashed; the hash of the version you last approved is stored in `%ProgramData%\DesktopBridge\state\config.approved.json`. If the config is new or changed, the feed window shows what changed and asks
 `Approve changed config? (y/N)`; **no tool works until you answer**. `config.json`, `SKILL.md`, `SECURITY.md` and the approval store are on the protected-paths list (`fs` refuses writes, `run` refuses non-read-only commands touching them).
 
-**Optional hard lock (do NOT let Claude run this; you run it yourself in an elevated PowerShell).** The worker runs as your account, elevated, so software checks can in theory be bypassed. An ACL makes accidental or casual edits impossible; it is not a boundary against an elevated process of the same account:
+**Optional hard lock (do NOT let Grok run this; you run it yourself in an elevated PowerShell).** The worker runs as your account, elevated, so software checks can in theory be bypassed. An ACL makes accidental or casual edits impossible; it is not a boundary against an elevated process of the same account:
 ```
 icacls "C:\Users\SysAdmin\tools\claude-desktop-bridge\config.json" /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)"
 icacls "C:\Users\SysAdmin\tools\claude-desktop-bridge\skills" /inheritance:r /grant:r "SYSTEM:(RX)" "Administrators:(RX)" /T
@@ -176,3 +176,20 @@ To edit later: `icacls <path> /grant "Administrators:(F)"` (then re-run the lock
 **Shared environment (awareness, yield, never fight).** Every step of a glide, key press and typed character checks the kill switch and that the target window still exists (`TARGET_CLOSED` if you closed it); typing also needs the keyboard focus to stay
 with the target (`FOCUS_CHANGED` if you switched windows; the bridge does not steal focus back) and no keys/mouse buttons held by you in that window (`USER_INTERVENTION`; media/volume/browser keys are ignored, so changing a song or closing an unrelated window does not matter). Stops carry `data` (foreground_now, target_alive, typed, remaining). A bump of the mouse during a glide is waited out (`control.yield_wait_s`, default 6 s, until it is still for 0.5 s), then the glide restarts; a click is cancelled if the cursor is not where the bridge put it. Closing the feed window stops the worker and the session.
 **mcp SDK quirk fixed:** `desktop_bridge/mcp_patch.py` stops the SDK from JSON-parsing string arguments such as `{}` or `[1,2]` (it would have broken writing JSON files with `fs`, `type`, `clipboard_set`).
+
+## Remote mode (implemented)
+
+Opt-in localhost MCP streamable-HTTP + outbound tunnel. Same tools and safety as stdio mode.
+
+* **Start:** `python launcher.py --remote --port 8765` (binds `127.0.0.1` only).
+* **Tokens:** per-bot named Bearer tokens — `python launcher.py --add-bot <name>`, `--list-bots`, `--revoke-bot <name>`. Stored under `%LOCALAPPDATA%\GrokDesktopBridge\remote_bots.json`. Constant-time compare; requests without a valid token get **401**.
+* **Multi-bot:** several bots share one listener and the shared guardian / feed / Esc kill switch. Each call is tagged with the bot name; Esc stops **all** bots and the HTTP server.
+* **Tunnel (user-run):** `cloudflared tunnel --url http://127.0.0.1:8765` (default documented path). Hand the public HTTPS URL + bot token to the cloud bot.
+* **Safety still local:** white pulsing overlay, action feed (`Remote session connected` + per-call logs), two-stage Esc, injection gate, config approval, no hidden execution.
+* **Client skill:** `skills/grok-bridge-client/SKILL.md` (generic — any Grok Bot).
+* **Windows walkthrough:** [`docs/REMOTE_QUICKSTART.md`](docs/REMOTE_QUICKSTART.md).
+
+### Longer-term (not in this branch)
+
+An outbound-only WebSocket relay (no listening socket on the PC) remains a desirable alternative for tighter threat models; remote HTTP + user tunnel is the power-user path that ships today.
+
