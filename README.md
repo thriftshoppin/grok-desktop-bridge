@@ -52,6 +52,22 @@ Details: [SECURITY.md](SECURITY.md) and [docs/SECURITY-AUDIT.md](docs/SECURITY-A
 ## Documentation
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/CONFIG.md](docs/CONFIG.md) · [docs/OPERATIONS.md](docs/OPERATIONS.md) · [docs/TESTING.md](docs/TESTING.md) · [docs/TOOLS.md](docs/TOOLS.md) (generated) · [docs/features/](docs/features/) · [CHANGELOG.md](CHANGELOG.md)
 
+## Fresh install from scratch (Windows)
+
+Double-click **`Install-GrokBridge.cmd`** in this folder (or the copy you unzipped). The window stays open, prints every step, and writes a log under `%USERPROFILE%\GrokDesktopBridge-logs`.
+
+It shows the exact removal list first (Desktop and Downloads via Known Folders, including OneDrive redirection, plus `%LOCALAPPDATA%\GrokDesktopBridge`, `%ProgramData%\GrokDesktopBridge`, `%TEMP%\GrokDesktopBridge`, and the task `GrokDesktopBridgeWorker`). Nothing is deleted until you type `REMOVE LISTED GROK INSTALLS`. Reparse points are not entered. A `desktop-mcp-bridge` folder that is Claude/Codex is listed and **not** removed unless you pass `-IncludeOtherClientPath` for that exact path and type the longer phrase. The running installer directory is kept.
+
+The fresh copy is **`%USERPROFILE%\grok-desktop-bridge`** (not a nested `-main` folder), with its own `.venv`. Supported Python is **64-bit CPython 3.12, 3.13, or 3.14**. `dxcam==0.3.0` has no 32-bit wheel and no Python 3.15 wheel; pip is run with `--only-binary=:all:` and a failed import stops the install with the pip exit code. A desktop shortcut **Grok Desktop Bridge Light Switch** is created on the Known Folder desktop.
+
+Turn it on with that shortcut (guardian feed, `http://127.0.0.1:8790/mcp`, cloudflared). The switch prints the tunnel URL and log paths and does **not** print the bearer token. Create a token in a window you are watching:
+
+```bat
+%USERPROFILE%\grok-desktop-bridge\.venv\Scripts\python.exe %USERPROFILE%\grok-desktop-bridge\launcher.py --add-bot work
+```
+
+Preview the removal list without changing anything: `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-GrokBridge.ps1 -DryRun`
+
 ## Install / register (you do this; the bridge never edits your client's config)
 
 **Intended primary: Grok / Local Computer Assistant** (see [Remote mode](#remote-mode-implemented--grok-bot-cloud-only); multi-bot named tokens supported).
@@ -82,8 +98,8 @@ Rebuild the environment: `python -m venv .venv` (Python 3.14.8 here) then `.venv
 
 **Esc is two-stage and applies to every client at once:** the first Esc **cancels every tool call that is running** (they return `CANCELLED_BY_USER`, the border turns yellow, the bridge stays usable); a **second Esc within 10 s** (`kill_switch.esc_second_press_s`), or an Esc while Grok is in control with nothing running, **stops the bridge** for everyone (border red, every call refused until you resume in the feed window).
 
-**Esc** (while Grok is in control; see below), `Ctrl+Alt+Pause` or `Ctrl+Alt+Shift+K` (combos configurable in `config.json`). The worker registers them itself, so they work even if the
-launcher or the agent hangs. (Hotkey plus a key-state poll, so it also works when no window has the foreground.) On trigger: in-flight waits, typing, clicks and `desktop_run` stop within about a second, every tool
+**Esc** (global while Grok is in control, including when another app is in front), `Ctrl+Alt+Pause` or `Ctrl+Alt+Shift+K` (combos configurable in `config.json`). The worker registers the combos itself, so they work even if the
+launcher or the agent hangs. (Hotkey plus a key-state poll, so it also works when no window has the foreground.) Esc is polled, not registered, so the key still reaches the foreground app. Alt/Ctrl/Win chords and a short arm/release grace ignore the synthetic Esc that Alt+Tab and the overlay can produce. On a real stop: in-flight waits, typing, clicks and `desktop_run` stop within about a second, every tool
 returns `KILL_SWITCH` until someone calls `desktop_resume`, and the feed window shows it in red. `desktop_session_status` reports the state.
 
 ## Tools (prefix `desktop_`)

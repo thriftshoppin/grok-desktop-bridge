@@ -1,3 +1,8 @@
+# 64-bit CPython 3.12, 3.13, or 3.14 on Windows.
+# dxcam==0.3.0 has win_amd64 wheels for cp310-cp314 only (no 32-bit, no cp315).
+# numpy==2.5.4 requires Python >=3.12. Pillow==13.0.0 requires >=3.11.
+# Install with: python -m pip install --only-binary=:all: -r requirements.txt
+# Do not compile dxcam from the sdist if the wheel is missing; fix the interpreter instead.
 mcp==2.3.0
 uiautomation==2.0.29
 mss==10.2.0

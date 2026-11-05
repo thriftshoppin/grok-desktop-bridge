@@ -16,11 +16,12 @@ A strong prompt-injection signature in screen/file/clipboard/command text replac
 ## Troubleshooting
 | Symptom | Check |
 |---|---|
-| No window appears | `runas` refused: run `install-elevated-task.ps1` once in an elevated PowerShell (scheduled-task fallback `DesktopBridgeWorker`) |
+| No window appears | `runas` refused (other than UAC Cancel): run `install-elevated-task.ps1` once in an elevated PowerShell (scheduled-task fallback `GrokDesktopBridgeWorker`). UAC Cancel (error 1223) does not start that task. |
+| Light switch | Desktop shortcut or `GrokBridge-LightSwitch.cmd`. ON waits for the guardian, HTTP 401 on 127.0.0.1:8790, and a trycloudflare URL, then prints the URL. OFF stops owned Grok processes only. Logs: `%USERPROFILE%\GrokDesktopBridge-logs`. |
 | Launcher says "refusing to talk to the program that owns the control pipe" | Something other than this bridge's guardian owns `\.\pipe\desktop-bridge-ctl-<instance>-<user>`. Find it (`handle`/Process Explorer), close it, restart |
 | Guardian window says "CONTROL PIPE UNAVAILABLE" and closes | Same cause at start-up |
 | Every tool waits | The feed window is asking for approval or an "Allow client?" answer |
-| Debug log | `%TEMP%\desktop-bridge\worker-<pid>.log` |
+| Debug log | `%TEMP%\GrokDesktopBridge\worker-<pid>.log` |
 
 ## Remote mode
 

@@ -183,8 +183,90 @@ class PipeNames(unittest.TestCase):
         from desktop_bridge import worker
         with mock.patch.dict(os.environ, {"USERNAME": "Someone"}):
             self.assertEqual(worker.control_pipe_name("grok"), "grok-desktop-bridge-ctl-grok-someone")
-        self.assertEqual(worker.control_pipe_name("main"), "grok-desktop-bridge-ctl-main-someone")
+            self.assertEqual(worker.control_pipe_name("main"), "grok-desktop-bridge-ctl-main-someone")
             self.assertNotEqual(worker.control_pipe_name("main"), worker.control_pipe_name("t1"))
+
+
+class EscEdgeFilter(unittest.TestCase):
+    """False-trip filters. Esc stays global: there is no focus/foreground parameter."""
+
+    def fire(self, **kw):
+        defaults = dict(
+            esc_down=True, esc_was_down=False, in_control=True, was_in_control=True,
+            now=10.0, armed_at=0.0, arm_grace_s=0.35,
+            alt_down=False, ctrl_down=False, win_down=False,
+            modifier_down_prev=False, modifier_quiet_until=None, modifier_release_grace_s=0.30,
+        )
+        defaults.update(kw)
+        return esc.should_count_esc_edge(**defaults)
+
+    def test_signature_is_not_limited_to_the_focused_window(self):
+        import inspect
+        names = set(inspect.signature(esc.should_count_esc_edge).parameters)
+        self.assertNotIn("focused", names)
+        self.assertNotIn("foreground", names)
+        self.assertNotIn("feed_focused", names)
+
+    def test_plain_rising_edge_while_in_control_fires(self):
+        fire, was, _armed, _quiet = self.fire(armed_at=0.0, now=10.0)
+        self.assertTrue(fire)
+        self.assertTrue(was)
+
+    def test_alt_tab_chord_ignored(self):
+        fire, _, _, _ = self.fire(alt_down=True)
+        self.assertFalse(fire)
+
+    def test_ctrl_esc_ignored(self):
+        fire, _, _, _ = self.fire(ctrl_down=True)
+        self.assertFalse(fire)
+
+    def test_win_esc_ignored(self):
+        fire, _, _, _ = self.fire(win_down=True)
+        self.assertFalse(fire)
+
+    def test_arming_tick_swallows_esc(self):
+        fire, was, armed, _quiet = self.fire(was_in_control=False, now=5.0, armed_at=None)
+        self.assertFalse(fire)
+        self.assertTrue(was)
+        self.assertEqual(armed, 5.0)
+
+    def test_arm_grace_suppresses(self):
+        fire, _, _, _ = self.fire(now=5.1, armed_at=5.0, arm_grace_s=0.35, was_in_control=True)
+        self.assertFalse(fire)
+
+    def test_after_grace_plain_esc_fires(self):
+        fire, _, _, _ = self.fire(now=5.5, armed_at=5.0, arm_grace_s=0.35, esc_was_down=False)
+        self.assertTrue(fire)
+
+    def test_not_in_control_never_fires(self):
+        fire, _, armed, _quiet = self.fire(in_control=False, was_in_control=False)
+        self.assertFalse(fire)
+        self.assertIsNone(armed)
+
+    def test_modifier_release_suppresses_trailing_esc(self):
+        fire, was, _armed, quiet = self.fire(
+            modifier_down_prev=True, alt_down=False, esc_down=True, esc_was_down=False, now=10.0,
+        )
+        self.assertFalse(fire)
+        self.assertTrue(was)
+        self.assertEqual(quiet, 10.30)
+
+    def test_held_esc_after_quiet_is_not_a_new_edge(self):
+        fire, _, _, _ = self.fire(
+            now=10.4, esc_down=True, esc_was_down=True, modifier_quiet_until=10.3,
+        )
+        self.assertFalse(fire)
+
+    def test_new_press_after_modifier_quiet_fires(self):
+        fire, _, _, _ = self.fire(
+            now=11.0, esc_down=True, esc_was_down=False, modifier_quiet_until=10.3,
+        )
+        self.assertTrue(fire)
+
+    def test_second_stage_decision_is_unchanged(self):
+        self.assertEqual(esc.decide(105.0, 1, 100.0, 10), "stop")
+        self.assertEqual(esc.decide(100.0, 0, None, 10), "stop")
+        self.assertEqual(esc.decide(100.0, 2, None, 10), "cancel")
 
 
 if __name__ == "__main__":

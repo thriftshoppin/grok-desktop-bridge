@@ -33,6 +33,7 @@ from . import mcp_patch
 from . import policy, safety, tools, winapi
 from .overlay import Overlay
 from . import brand
+from . import feedwin
 from .safety import KillSwitch, LogWriter, ToolRefused
 
 import anyio
@@ -77,6 +78,15 @@ class Feed:
             winapi.kernel32.SetConsoleMode(hout, mode.value | 0x0004)  # ANSI colours
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+            # Visible head that does not steal focus (Alt-Tab / remote use must not synthesize Esc).
+            hwnd = winapi.kernel32.GetConsoleWindow()
+            if hwnd:
+                winapi.user32.ShowWindow(hwnd, feedwin.SW_SHOWNOACTIVATE)
+                if bool(cfg.get("feed", {}).get("always_on_top", False)):
+                    winapi.user32.SetWindowPos(
+                        hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0,
+                        feedwin.SWP_NOSIZE | feedwin.SWP_NOMOVE | feedwin.SWP_NOACTIVATE,
+                    )
         except Exception:
             pass
         threading.Thread(target=self._run, name="feed", daemon=True).start()
@@ -543,6 +553,8 @@ def main() -> None:
     hub = Hub()
     ctl_box: dict = {}
     second = float(cfg.get("kill_switch", {}).get("esc_second_press_s", 10))
+    arm_grace = float(cfg.get("kill_switch", {}).get("esc_arm_grace_s", 0.35))
+    mod_grace = float(cfg.get("kill_switch", {}).get("esc_modifier_release_grace_s", 0.30))
 
     def on_trip(src):
         log.log(f"KILL source={src}; all tools refuse until resume (every client)")
@@ -561,7 +573,8 @@ def main() -> None:
             ctl_box["ctl"].on_cancel(src)
 
     ks = KillSwitch(cfg["kill_switch"]["hotkeys"], on_trip=on_trip, in_control=lambda: bool(ctl_box.get("ctl") and ctl_box["ctl"].in_control()),
-                    inflight=hub.count, on_cancel=on_cancel, second_press_s=second)
+                    inflight=hub.count, on_cancel=on_cancel, second_press_s=second,
+                    esc_arm_grace_s=arm_grace, esc_modifier_release_grace_s=mod_grace)
     overlay = Overlay(cfg.get("overlay"), force_fail=args.force_overlay_fail)
     overlay_ok = overlay.start()
     ctl = control_mod.Control(cfg, overlay, ks, feed.put)
@@ -571,6 +584,18 @@ def main() -> None:
     base = tools.Bridge(cfg, log, ks, cap=cap, client="guardian", approved=approved_evt)
     base.overlay, base.control, base.say = overlay, ctl, feed.put
     base.place_feed()
+
+    def keep_feed_visible() -> None:
+        """Keep the feed on screen across focus changes without activating it."""
+        while not stopping.is_set():
+            try:
+                if bool(cfg.get("feed", {}).get("keep_visible", True)):
+                    base.ensure_feed_visible()
+            except Exception:
+                pass
+            stopping.wait(2.0)
+
+    threading.Thread(target=keep_feed_visible, name="feed-visible", daemon=True).start()
     if overlay_ok:
         feed.put(f"overlay (white pulsing border + halo) ready; excluded from screenshots: {overlay.affinity_ok}", "grn")
     else:

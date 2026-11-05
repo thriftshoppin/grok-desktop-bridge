@@ -12,7 +12,7 @@ import subprocess
 import threading
 import time
 
-from . import capture, clients, coords, policy, safety, uia, winapi
+from . import capture, clients, coords, feedwin, policy, safety, uia, winapi
 from .coords import Monitor
 from .safety import ToolRefused
 
@@ -139,21 +139,26 @@ class Bridge:
         return {"hwnd": h, "visible": bool(winapi.user32.IsWindowVisible(h)), "minimized": bool(winapi.user32.IsIconic(h))}
 
     def ensure_feed_visible(self) -> bool:
-        """Restore the feed window if it was minimized/hidden or is off-screen, without taking keyboard focus. True if it had to be restored."""
+        """Restore the feed window if it was minimized/hidden or is off-screen, without taking keyboard focus.
+
+        Called on tool activity and on a timer so the feed stays visible across Alt-Tab and focus changes.
+        ShowWindow uses SW_SHOWNOACTIVATE: another app keeps the foreground. True if it had to be restored.
+        """
         h = console_root()
         if not h:
             return False
-        fixed = False
-        if winapi.user32.IsIconic(h) or not winapi.user32.IsWindowVisible(h):
-            winapi.user32.ShowWindow(h, 4)  # SW_SHOWNOACTIVATE
-            fixed = True
-        r = winapi.window_rect(h)
-        if not any(coords.intersect(r, m.rect) for m in self.monitors()):
+        visible = bool(winapi.user32.IsWindowVisible(h))
+        iconic = bool(winapi.user32.IsIconic(h))
+        rect = winapi.window_rect(h)
+        on_screen = any(coords.intersect(rect, m.rect) for m in self.monitors())
+        if not feedwin.feed_needs_restore(visible, iconic, on_screen):
+            return False
+        if iconic or not visible:
+            winapi.user32.ShowWindow(h, feedwin.SW_SHOWNOACTIVATE)
+        if not on_screen:
             self.place_feed()
-            fixed = True
-        if fixed:
-            self.say("feed window was hidden/minimized/off-screen: restored", "yel")
-        return fixed
+        self.say("feed window was hidden/minimized/off-screen: restored without taking focus", "yel")
+        return True
 
     def place_feed(self) -> None:
         h = console_root()
@@ -164,7 +169,7 @@ class Bridge:
             return
         w, hh = 900, 380
         x, y = m.x + m.w - w - 20, m.y + m.h - hh - 70
-        winapi.user32.SetWindowPos(h, 0, x, y, w, hh, 0x10 | 0x40)  # SWP_NOACTIVATE | SWP_SHOWWINDOW
+        winapi.user32.SetWindowPos(h, 0, x, y, w, hh, feedwin.SWP_NOACTIVATE | feedwin.SWP_SHOWWINDOW)
 
     def children_audit(self) -> list[dict]:
         """Child processes of the worker: each must share the visible feed console or own a visible window. Nothing hidden."""
